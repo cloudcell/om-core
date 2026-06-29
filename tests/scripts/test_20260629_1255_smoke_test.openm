@@ -1,0 +1,22 @@
+# Smoke test: basic dimension, cube, view, rule, and calculation pipeline
+
+# Define dimensions (unique names to avoid collisions when run in shared sessions)
+ dim SmokeYears: Y2023 Y2024 Y2025
+ dim SmokeProducts: A B
+
+# Define cube
+ cube SmokeSales SmokeYears SmokeProducts
+
+# Define view
+ view SmokeV = SmokeSales::SmokeYears:SmokeProducts
+
+# Set rule and calculate
+ rule SmokeSales::@.value:*.* = 10
+ calc
+
+# Verify calculated values
+ assert SmokeSales::@.value:SmokeYears.Y2023:SmokeProducts.A == 10
+ assert SmokeSales::@.value:SmokeYears.Y2024:SmokeProducts.B == 10
+ assert SmokeSales::@.value:SmokeYears.Y2025:SmokeProducts.A == 10
+
+ echo Smoke test passed

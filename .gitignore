@@ -1,3 +1,59 @@
+venv
+*/__pycache__/**
+*.pyc
+/tests/run*
+/tests/legacy/*
+*.gz
+debug*.json
+demo*.json
+New_Model*.json
+*.pyc
+__pycache__/
+
+# demo data:
+demo_data/*
+*.log
+*.conf
+!.om/config/**
+*.txt
+/benchmarks/*.png
+/benchmarks/models/**
+!lib_timelinewidget/demo/session_20260418_043345.txt
+
+log/*
+.om/sessions/*
+*.xz
+*.sqlite
+
+# User macro scratch files (not tracked)
+.om/macros/format_sel.openm
+.om/macros/test_macro.openm
+.om/macros/test_model.openm
+.om/macros/test_mut.openm
+.om/macros/test_never.openm
+.om/macros/test_vars.openm
+
+# Cython build artifacts (produced by --cython release builds)
+*.so
+*.pyd
+lib_openm/**/*.c
+
+# save baseline in the research folder in json format
+sample_models/*
+**/zzz_archive/*
+
+out/*
+tests/out/*
+
+build/*
+dist/*
+
+
+!version.txt
+!version-manual.txt
+
+# -------------- DEFAULT GITHUB GITIGNORE -----------------------
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,3 +272,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+

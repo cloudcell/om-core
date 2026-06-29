@@ -1,0 +1,6 @@
+# Macro: set_fill_color
+# Created: 2026-06-20T05:57:38.798004
+
+echo "test"
+rule  {{selection}}:@.fill = "{{widget_value}}"
+
