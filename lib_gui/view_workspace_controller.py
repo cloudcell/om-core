@@ -309,41 +309,34 @@ class ViewWorkspaceController(QtCore.QObject):
                     self._tabs.setCurrentIndex(i)
                     break
             
-            # Restore selection state to new active table
+            # Restore selection state to new active table.
+            # MatrixGrid.reload() already restores the index set by full row/col
+            # keys for row/col/cell modes, so we only restore the mode, anchor,
+            # and active cell here. Rebuilding the index set manually collided
+            # with reload() and produced bogus {0} for cell mode.
             if saved_selection and self._active_view_id == prev_active_view_id:
                 try:
                     new_table = self.current_tab.table
                     new_table._sel_mode = saved_selection['_sel_mode']
-                    # For row/col mode, restore by index directly (indices are stable during rename)
-                    new_indices = set()
-                    saved_indices = saved_selection.get('_sel_indices', set())
-                    if saved_selection['_sel_mode'] == 'col':
-                        for idx in saved_indices:
-                            if isinstance(idx, int) and 0 <= idx < len(new_table._cols):
-                                new_indices.add(idx)
-                    elif saved_selection['_sel_mode'] == 'row':
-                        for idx in saved_indices:
-                            if isinstance(idx, int) and 0 <= idx < len(new_table._rows):
-                                new_indices.add(idx)
-                    # Use the newly validated indices
-                    new_table._sel_indices = new_indices if new_indices else {0}
-                    DEBUG_GUI and print(f"DEBUG rebuild_tabs: restored indices {saved_indices} -> {new_indices}, using {new_table._sel_indices}")
-                    # Update sel_row/sel_col to match the first selected index
-                    if new_indices:
-                        first_idx = min(new_indices)
-                        if saved_selection['_sel_mode'] == 'col':
-                            new_table._sel_col = first_idx
-                        elif saved_selection['_sel_mode'] == 'row':
-                            new_table._sel_row = first_idx
+                    new_table._sel_row = saved_selection['_sel_row']
+                    new_table._sel_col = saved_selection['_sel_col']
                     new_table._anchor_row = saved_selection['_anchor_row']
                     new_table._anchor_col = saved_selection['_anchor_col']
+                    # For cell mode, keep _sel_indices consistent with the active cell
+                    # because MatrixGrid.reload() may have left it empty or restored
+                    # a different set via item-id fallback.
+                    if saved_selection['_sel_mode'] == 'cell':
+                        if 0 <= new_table._sel_row < len(new_table._rows) and 0 <= new_table._sel_col < len(new_table._cols):
+                            new_table._sel_indices = {(new_table._sel_row, new_table._sel_col)}
+                        else:
+                            new_table._sel_indices = set()
                     # Prevent showEvent from resetting to cell mode after we restore
                     new_table._did_initial_focus = True
                     # Persist restored selection so _apply_session_selection in other
                     # grids and future rebuilds see the correct state.
                     if hasattr(new_table, '_write_selection_to_session'):
                         new_table._write_selection_to_session()
-                    DEBUG_GUI and print(f"DEBUG rebuild_tabs: restored selection to new table with indices {new_indices}")
+                    DEBUG_GUI and print(f"DEBUG rebuild_tabs: restored active cell to ({new_table._sel_row}, {new_table._sel_col})")
                 except Exception as e:
                     DEBUG_GUI and print(f"DEBUG rebuild_tabs: error restoring selection: {e}")
             

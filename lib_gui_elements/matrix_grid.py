@@ -1826,6 +1826,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         saved_row_item_ids: set[str] = set()
         saved_col_item_ids: set[str] = set()
         saved_cell_items: set[tuple[str, str]] = set()  # (row_item_id, col_item_id)
+        saved_cell_keys: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()  # (row_key, col_key)
         saved_row_keys: set[tuple[str, ...]] = set()
         saved_col_keys: set[tuple[str, ...]] = set()
         
@@ -1866,6 +1867,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                                 col_iid = col.get("item_id")
                                 if isinstance(row_iid, str) and isinstance(col_iid, str):
                                     saved_cell_items.add((row_iid, col_iid))
+                                if 0 <= r < len(self._row_keys) and 0 <= c < len(self._col_keys):
+                                    saved_cell_keys.add((tuple(self._row_keys[r]), tuple(self._col_keys[c])))
         
         # Load saved column widths and row header widths from view.
         # Only overwrite the width map that is not currently being resized.
@@ -1980,12 +1983,26 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             if new_indices:
                 self._sel_col = min(new_indices)
         elif saved_sel_mode == "cell":
-            # Restore cell selection by (row_item_id, col_item_id) pairs
+            # Restore cell selection by full (row_key, col_key) first; leaf item
+            # IDs alone are not unique in stacked dimension views.
             valid_cells: set[tuple[int, int]] = set()
-            for row_iid, col_iid in saved_cell_items:
-                if row_iid in row_item_to_idx and col_iid in col_item_to_idx:
-                    valid_cells.add((row_item_to_idx[row_iid], col_item_to_idx[col_iid]))
-            # Fallback to index-based only if ID-based restore found nothing
+            row_key_to_idx: dict[tuple[str, ...], int] = {}
+            for idx, key in enumerate(self._row_keys):
+                if self._rows[idx].get("is_leaf", False):
+                    row_key_to_idx[tuple(key) if isinstance(key, list) else key] = idx
+            col_key_to_idx: dict[tuple[str, ...], int] = {}
+            for idx, key in enumerate(self._col_keys):
+                if self._cols[idx].get("is_leaf", False):
+                    col_key_to_idx[tuple(key) if isinstance(key, list) else key] = idx
+            for row_key, col_key in saved_cell_keys:
+                if row_key in row_key_to_idx and col_key in col_key_to_idx:
+                    valid_cells.add((row_key_to_idx[row_key], col_key_to_idx[col_key]))
+            # Fallback to (row_item_id, col_item_id) pairs if no full key matches
+            if not valid_cells:
+                for row_iid, col_iid in saved_cell_items:
+                    if row_iid in row_item_to_idx and col_iid in col_item_to_idx:
+                        valid_cells.add((row_item_to_idx[row_iid], col_item_to_idx[col_iid]))
+            # Fallback to index-based only if key-based restore found nothing
             if not valid_cells:
                 for idx in saved_sel_indices:
                     if not isinstance(idx, tuple) or len(idx) != 2:
@@ -1997,6 +2014,15 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         valid_cells.add((r, c))
             DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
             self._sel_indices = valid_cells
+            # Keep the active/focus cell consistent with the restored selection
+            # so paint logic does not highlight a different cell.
+            if len(valid_cells) == 1:
+                self._sel_row, self._sel_col = next(iter(valid_cells))
+            elif len(valid_cells) > 1:
+                # Multi-cell selection: keep the active cell inside the restored set
+                # if the old active cell is no longer valid.
+                if (self._sel_row, self._sel_col) not in valid_cells:
+                    self._sel_row, self._sel_col = min(valid_cells)
 
         self._anchor_row = min(saved_anchor_row, max(0, len(self._rows) - 1)) if self._rows else 0
         self._anchor_col = min(saved_anchor_col, max(0, len(self._cols) - 1)) if self._cols else 0
