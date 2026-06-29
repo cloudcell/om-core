@@ -7,7 +7,13 @@ B.1 scope: ui.refresh, ui.grid.refresh, ui.status.update
 Deferred: ui.view.refresh, ui.view.patch, ui.dirty.changed
 """
 
-from enum import StrEnum
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        pass
 
 
 class UITopic(StrEnum):

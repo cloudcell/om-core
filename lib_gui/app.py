@@ -4066,7 +4066,7 @@ class MainWindow(QtWidgets.QMainWindow):
             
     def _reorder_toolbar_button(self, action_text: str, drop_pos: QtCore.QPoint, is_separator: bool = False, separator_idx: int = None) -> None:
         """Reorder a toolbar button or separator to the specified position."""
-        print(f"[DEBUG] Reordering {'separator' if is_separator else f"button '{action_text}'"} to pos {drop_pos}")
+        print(f"[DEBUG] Reordering {'separator' if is_separator else 'button ' + repr(action_text)} to pos {drop_pos}")
         
         toolbar = self._edit_toolbar
         if not toolbar or not drop_pos:

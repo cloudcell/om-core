@@ -1995,7 +1995,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         continue
                     if 0 <= r < len(self._rows) and 0 <= c < len(self._cols):
                         valid_cells.add((r, c))
-            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
             self._sel_indices = valid_cells
 
         self._anchor_row = min(saved_anchor_row, max(0, len(self._rows) - 1)) if self._rows else 0
@@ -5153,7 +5153,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 return True
             if key == QtCore.Qt.Key.Key_Escape:
                 self._cancel_edit()
-                DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+                DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
                 self._sel_indices.clear()
                 self._edit_mode = "navigation"
                 return True
@@ -5696,7 +5696,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             self._sel_row, self._sel_col = r, c
             # Only clear multi-selection if Ctrl is not held
             if not ctrl_held:
-                DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+                DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
                 self._sel_indices.clear()
             else:
                 # Ctrl+click on cell: extend selection by adding the clicked cell
@@ -7159,7 +7159,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
             r0, r1 = min(self._anchor_row, self._sel_row), max(self._anchor_row, self._sel_row)
             c0, c1 = min(self._anchor_col, self._sel_col), max(self._anchor_col, self._sel_col)
-            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
             self._sel_indices.clear()
             for ri in range(r0, r1 + 1):
                 if not self._rows[ri].get("is_leaf", False):
@@ -7255,7 +7255,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
             r0, r1 = min(self._anchor_row, self._sel_row), max(self._anchor_row, self._sel_row)
             c0, c1 = min(self._anchor_col, self._sel_col), max(self._anchor_col, self._sel_col)
-            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
             self._sel_indices.clear()
             for ri in range(r0, r1 + 1):
                 if not self._rows[ri].get("is_leaf", False):
@@ -7284,7 +7284,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             elif key == QtCore.Qt.Key.Key_Down:
                 self._sel_row = self._find_next_leaf_row(len(self._rows) - 1)
             self._clamp_selection_to_leaf()
-            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
             self._sel_indices.clear()
             self._anchor_row, self._anchor_col = self._sel_row, self._sel_col
             self.selection_changed.emit()
@@ -7302,7 +7302,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 self._sel_row = self._find_next_leaf_row(len(self._rows) - 1) if self._rows else 0
                 self._sel_col = max(0, len(self._cols) - 1)
             self._clamp_selection_to_leaf()
-            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
             self._sel_indices.clear()
             self._anchor_row, self._anchor_col = self._sel_row, self._sel_col
             self.selection_changed.emit()
@@ -7357,7 +7357,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             self._sel_row, self._sel_col = nr, nc
             self._clamp_selection_to_leaf()
             # Navigating without Shift collapses to single-cell selection
-            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+            DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
             self._sel_indices.clear()
             self._anchor_row, self._anchor_col = self._sel_row, self._sel_col
             self.selection_changed.emit()
@@ -7623,7 +7623,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         DEBUG_GUI and print(f"DEBUG enter_cell_from_header: before_clamp row={self._sel_row} col={self._sel_col}")
         self._clamp_selection_to_leaf()
         DEBUG_GUI and print(f"DEBUG enter_cell_from_header: after_clamp row={self._sel_row} col={self._sel_col}")
-        DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__("inspect").currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
+        DEBUG_GUI and print(f"DEBUG SET CELL: line {__import__('inspect').currentframe().f_lineno} prev={self._sel_mode}"); self._sel_mode = "cell"
         self._sel_indices.clear()
         self._anchor_row, self._anchor_col = self._sel_row, self._sel_col
         self._hide_editor()
