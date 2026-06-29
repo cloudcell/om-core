@@ -89,7 +89,7 @@ def create_runtime(
             snapshot_adapter=snapshot_adapter,
             workspace_provider=lambda: ctx.workspace,
             workspace_consumer=lambda ws: (
-                engine.replace_workspace(ws),
+                ctx.engine.replace_workspace(ws),
                 setattr(ctx, "workspace", ws),
             )[0],
         )
@@ -100,7 +100,7 @@ def create_runtime(
     # restore command succeeds.
     bus.subscribe(
         "command.restore_checkpoint.succeeded",
-        lambda _event: engine.undo_manager.clear(),
+        lambda _event: ctx.engine.undo_manager.clear(),
     )
 
     if workspace_id is not None:
