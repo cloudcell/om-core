@@ -15,7 +15,12 @@ demo_data/*
 *.log
 *.conf
 !.om/config/**
+
 *.txt
+!requirements.txt
+!version.txt
+!version-manual.txt
+
 /benchmarks/*.png
 /benchmarks/models/**
 !lib_timelinewidget/demo/session_20260418_043345.txt
