@@ -10,6 +10,12 @@ projections of that model, not the source of truth.
 > Alpha software: OM Core is under active development. APIs, command names, file
 > formats, GUI behavior, and module boundaries may change before v1.0.
 
+<p align="center">
+  <a href="https://youtu.be/9txqmXQFRXc">
+    <img src="https://img.youtube.com/vi/9txqmXQFRXc/maxresdefault.jpg" alt="OM Core overview video" width="100%">
+  </a>
+</p>
+
 ## Documentation
 
 The main documentation site is here:
@@ -234,3 +240,8 @@ Please read:
 
 Security issues should not be reported through public GitHub issues. See
 `SECURITY.md`.
+
+## Feedback
+
+- **Bugs:** open a [GitHub issue](https://github.com/cloudcell/om-core/issues).
+- **Discussion:** join the [Discord](https://discord.gg/GfU5ypAbaD).
