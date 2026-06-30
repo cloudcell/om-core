@@ -73,6 +73,7 @@ class EditableRuleRow(QFrame):
 
             # Line 1: Rule body content (HBox) with line number
             self.rule_body_line = QWidget()
+            self.rule_body_line.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             self.row_layout = QHBoxLayout(self.rule_body_line)
             self.row_layout.setContentsMargins(4, 4, 8, 2)
             self.row_layout.setSpacing(6)
@@ -117,6 +118,8 @@ class EditableRuleRow(QFrame):
             self.setup_edit_mode()
         else:
             self.setup_display_mode()
+
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             
     def _load_svg_icon(self, icon_name: str, size: int = 14) -> QPixmap:
         """Load a Lucide SVG icon and render it to a pixmap."""
@@ -180,11 +183,12 @@ class EditableRuleRow(QFrame):
         rule_body_text += f"<span style='color: #6B7280; font-family: monospace;'> = </span>"
         rule_body_text += f"<span style='color: #111827; font-family: monospace;'>{rhs_html}</span>"
 
-        self.rule_body_label = QLabel(rule_body_text)
+        self.rule_body_label = QLabel()
         self.rule_body_label.setTextFormat(Qt.TextFormat.RichText)
         self.rule_body_label.setWordWrap(True)
         self.rule_body_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.rule_body_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.rule_body_label.setText(rule_body_text)
         self.row_layout.addWidget(self.rule_body_label, stretch=1)
 
         # Edit button
@@ -237,6 +241,21 @@ class EditableRuleRow(QFrame):
                 pass
             EditableRuleRow._global_drag_source = None
         super().focusOutEvent(event)
+
+    def resizeEvent(self, event):
+        """Keep the rule label tall enough for its wrapped text."""
+        super().resizeEvent(event)
+        if self.is_editing:
+            return
+        label = getattr(self, "rule_body_label", None)
+        if not isinstance(label, QLabel):
+            return
+        width = label.width()
+        if width <= 0:
+            return
+        target_height = label.heightForWidth(width)
+        if target_height > 0 and label.minimumHeight() != target_height:
+            label.setMinimumHeight(target_height)
 
     def setup_edit_mode(self):
         """Show inline editor with multi-line support."""
