@@ -12,17 +12,21 @@ Provides the foundation for the OpenM REPL including:
 from __future__ import annotations
 
 import cmd
-import readline
 import re
 import sys
 import time
 import queue
 import threading
 from pathlib import Path
+from typing import Optional
+
+try:
+    import readline
+except ImportError:
+    readline = None
 
 from .status_display import StatusDisplay
 from .repl_state import ReplState
-from typing import Optional
 
 
 # History file path (in user's home directory)
@@ -116,6 +120,8 @@ class OpenMREPLCore(cmd.Cmd):
 
     def _load_history(self) -> None:
         """Load command history from file."""
+        if readline is None:
+            return
         try:
             if HISTORY_FILE.exists():
                 readline.read_history_file(str(HISTORY_FILE))
@@ -132,7 +138,7 @@ class OpenMREPLCore(cmd.Cmd):
             if hasattr(self, '_prompt_history') and self._prompt_history:
                 entries = list(self._prompt_history.get_strings())
             # Fallback: read from readline if available
-            if not entries:
+            if not entries and readline is not None:
                 total_items = readline.get_current_history_length()
                 for i in range(1, total_items + 1):
                     cmd = readline.get_history_item(i)
@@ -542,7 +548,11 @@ class OpenMREPLCore(cmd.Cmd):
 
         # Install signal handlers that restore terminal echo before dying.
         # SIGTERM bypasses finally blocks, so this is the only reliable path.
-        for sig in (signal.SIGTERM, signal.SIGHUP):
+        # SIGHUP is Unix-only; skip it on Windows.
+        signals = [signal.SIGTERM]
+        if hasattr(signal, "SIGHUP"):
+            signals.append(signal.SIGHUP)
+        for sig in signals:
             try:
                 signal.signal(sig, self._make_exit_handler(sig))
             except Exception:

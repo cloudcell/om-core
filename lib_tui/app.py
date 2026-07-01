@@ -732,7 +732,11 @@ class PromptToolkitTUI:
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        for sig in (signal.SIGTERM, signal.SIGHUP):
+        # SIGHUP is Unix-only; skip it on Windows.
+        signals = [signal.SIGTERM]
+        if hasattr(signal, "SIGHUP"):
+            signals.append(signal.SIGHUP)
+        for sig in signals:
             try:
                 signal.signal(sig, lambda _s, _f: self.app.exit())
             except Exception:
