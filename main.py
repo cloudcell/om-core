@@ -66,7 +66,10 @@ def _run_gui_mode():
 
     # Initialize command layer BEFORE starting GUI thread (GUI needs commands during bootstrap)
     from lib_command.core.bootstrap import init_command_services
-    init_command_services()
+    from lib_storeadapters.json_file_adapter import JsonFileAdapter
+    from lib_storeadapters.timeline_aware_workspace_adapter import TimelineAwareWorkspaceAdapter
+    _workspace_adapter = TimelineAwareWorkspaceAdapter(JsonFileAdapter())
+    init_command_services(persistence_adapter=_workspace_adapter)
 
     # Start GUI in background thread
     from lib_runtime.gui_host import run_gui_in_thread
@@ -290,7 +293,10 @@ def _run_gui_only():
     splash.set_progress(40, 'Initializing...')
     _mark('Initializing GUI')
     from lib_command.core.bootstrap import init_command_services
-    init_command_services()
+    from lib_storeadapters.json_file_adapter import JsonFileAdapter
+    from lib_storeadapters.timeline_aware_workspace_adapter import TimelineAwareWorkspaceAdapter
+    _workspace_adapter = TimelineAwareWorkspaceAdapter(JsonFileAdapter())
+    init_command_services(persistence_adapter=_workspace_adapter)
 
     transport_server = None
     if start_transport:
