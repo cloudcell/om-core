@@ -5,22 +5,15 @@
 ### Build the Linux release
 
 ```bash
-source ./venv/bin/activate
-python scripts/build_release.py
-```
-
-Or, if you are using `uv`:
-
-```bash
 uv run python scripts/build_release.py
 ```
 
 Optional flags:
 
 ```bash
-python scripts/build_release.py --cython      # compile engine modules to C extensions
-python scripts/build_release.py --protected   # optimize=2, strip, no UPX, disable windowed traceback
-python scripts/build_release.py --cython --protected
+uv run python scripts/build_release.py --cython      # compile engine modules to C extensions
+uv run python scripts/build_release.py --protected   # optimize=2, strip, no UPX, disable windowed traceback
+uv run python scripts/build_release.py --cython --protected
 ```
 
 ### Extract and run on Linux
@@ -40,22 +33,15 @@ cd /path/to/install
 ### Build the Windows release
 
 ```powershell
-.\venv\Scripts\activate
-python scripts\build_release_windows.py
-```
-
-Or, if you are using `uv`:
-
-```powershell
 uv run python scripts\build_release_windows.py
 ```
 
 Optional flags:
 
 ```powershell
-python scripts\build_release_windows.py --cython      # compile engine modules to C extensions
-python scripts\build_release_windows.py --protected   # optimize=2, strip, no UPX, disable windowed traceback
-python scripts\build_release_windows.py --cython --protected
+uv run python scripts\build_release_windows.py --cython      # compile engine modules to C extensions
+uv run python scripts\build_release_windows.py --protected   # optimize=2, strip, no UPX, disable windowed traceback
+uv run python scripts\build_release_windows.py --cython --protected
 ```
 
 Output is written to `out\windows\OpenModeling-XX.X.X-windows-x86_64-YYYYMMDD-HHMMSS.zip`.

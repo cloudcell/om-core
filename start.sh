@@ -7,80 +7,14 @@
 #   2. Clients (GUI with splash, REPL, etc.) connect separately.
 #   3. Default: GUI + REPL both start. GUI gets the splash screen.
 #
-# Environment resolution:
-#   Prefers uv when available (pyproject.toml + uv.lock). Falls back to the
-#   legacy ./venv pip environment otherwise.
+# Requires uv. Install from https://docs.astral.sh/uv.
 
 # Resolve script directory for background/foreground coordination
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Resolve the Python environment
 source "$SCRIPT_DIR/scripts/resolve_python_env.sh"
-
-# Prefer uv if available. Otherwise, fall back to the legacy pip/venv path.
-if [ -x "./venv/bin/uv" ] || command -v uv >/dev/null 2>&1; then
-    resolve_python_env
-else
-    if [ ! -d "./venv" ]; then
-        read -r -p "Virtual environment not found. Create one? [Y/n]: " answer
-        answer=${answer:-Y}
-        case "$answer" in
-            [Yy]*)
-                echo "Creating virtual environment..."
-                python3 -m venv ./venv
-                ;;
-            *)
-                echo "Please create a virtual environment and retry."
-                exit 1
-                ;;
-        esac
-    fi
-
-    source ./venv/bin/activate
-    PYTHON="python"
-    PYRUN=""
-    UV=""
-    export UV PYTHON PYRUN
-
-    # Check if packages from requirements.txt are installed
-    check_packages() {
-        while IFS= read -r package || [[ -n "$package" ]]; do
-            # Skip empty lines and comments
-            [[ -z "$package" || "$package" =~ ^# ]] && continue
-
-            # Extract package name (handle specs like pkg>=1.0, pkg==1.0, etc.)
-            pkg_name=$(echo "$package" | sed -E 's/([a-zA-Z0-9_-]+).*/\1/')
-
-            if ! python -c "import $pkg_name" 2>/dev/null; then
-                # Try pip show as fallback for packages with different import names
-                if ! pip show "$pkg_name" >/dev/null 2>&1; then
-                    echo "Missing package: $package"
-                    return 1
-                fi
-            fi
-        done < requirements.txt
-        return 0
-    }
-
-    if ! check_packages; then
-        echo ""
-        read -r -p "Some required packages are missing. Install them now? [Y/n]: " answer
-        answer=${answer:-Y}
-        case "$answer" in
-            [Yy]*)
-                echo "Installing missing packages..."
-                pip install -r requirements.txt || {
-                    echo "Package installation failed. Please install manually and retry."
-                    exit 1
-                }
-                ;;
-            *)
-                echo "Please install missing packages by running: pip install -r requirements.txt"
-                exit 1
-                ;;
-        esac
-    fi
-fi
+resolve_python_env
 
 cleanup() {
     # Default-mode only: kill background GUI if REPL exited abnormally.

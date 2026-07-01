@@ -18,8 +18,8 @@ development rather than treated as stable compatibility obligations.
 ## Installation and Environment
 
 - The current setup is primarily intended for development use.
-- Installation may require a Python environment with the dependencies listed in
-  `requirements.txt`.
+- Installation uses uv with the dependencies listed in `pyproject.toml` and pinned
+  in `uv.lock`.
 - Some platforms may require additional system packages for GUI support.
 - Clean-machine setup has not yet been hardened into a packaged installer.
 - Windows support may require additional testing, especially around shell

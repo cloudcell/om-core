@@ -17,7 +17,6 @@ demo_data/*
 !.om/config/**
 
 *.txt
-!requirements.txt
 !version.txt
 !version-manual.txt
 
@@ -217,6 +216,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+venv.old/
 
 # Spyder project settings
 .spyderproject

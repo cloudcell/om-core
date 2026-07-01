@@ -33,14 +33,10 @@ A typical local setup is:
 git clone https://github.com/cloudcell/om-core.git
 cd om-core
 
-python -m venv .venv
-source .venv/bin/activate
-
-pip install -r requirements.txt
+uv sync
 ```
 
-If the repository later provides `pyproject.toml`, prefer the documented
-editable install command in the README.
+This creates a `.venv` and installs all locked dependencies.
 
 ## Running Tests
 

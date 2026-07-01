@@ -1,43 +1,75 @@
 #!/usr/bin/env bash
 # Resolve the project Python environment for shell entry points.
-#
-# Prefers uv when it is available and pyproject.toml is present.
-# Falls back to the legacy ./venv pip virtual environment.
+# OM Core uses uv exclusively.
 #
 # Exports:
-#   UV      - absolute path to the selected uv executable (empty if none)
-#   PYTHON  - command prefix for running Python (e.g. "uv run python" or "python")
-#   PYRUN   - command prefix for running commands through the env manager
-#             (e.g. "uv run" or empty)
+#   UV      - path to the uv executable
+#   PYTHON  - command prefix for running Python through uv
+#   PYRUN   - command prefix for running commands through uv
 
 resolve_python_env() {
-    # Prefer a project-local uv installed in the legacy venv, then any uv on PATH.
+    # Prefer a project-local uv, then common installer locations, then PATH.
     if [ -x "${PWD}/venv/bin/uv" ]; then
         UV="${PWD}/venv/bin/uv"
+    elif [ -x "$HOME/.local/bin/uv" ]; then
+        UV="$HOME/.local/bin/uv"
+        export PATH="$HOME/.local/bin:$PATH"
+    elif [ -x "$HOME/.cargo/bin/uv" ]; then
+        UV="$HOME/.cargo/bin/uv"
+        export PATH="$HOME/.cargo/bin:$PATH"
     elif command -v uv >/dev/null 2>&1; then
         UV=$(command -v uv)
     else
-        UV=""
+        cat >&2 <<'EOF'
+OM Core uses uv to manage its Python environment.
+
+uv is not installed or not on your PATH. uv is needed because it will:
+  - create the project's virtual environment (./.venv)
+  - install the exact dependency versions recorded in uv.lock
+  - run commands inside that environment
+
+EOF
+
+        if [ -t 0 ]; then
+            read -r -p "Install uv automatically now? [Y/n]: " answer
+            answer=${answer:-Y}
+            case "$answer" in
+                [Yy]*)
+                    echo "Installing uv..."
+                    if curl -LsSf https://astral.sh/uv/install.sh | sh; then
+                        if [ -x "$HOME/.local/bin/uv" ]; then
+                            UV="$HOME/.local/bin/uv"
+                            export PATH="$HOME/.local/bin:$PATH"
+                        elif [ -x "$HOME/.cargo/bin/uv" ]; then
+                            UV="$HOME/.cargo/bin/uv"
+                            export PATH="$HOME/.cargo/bin:$PATH"
+                        elif command -v uv >/dev/null 2>&1; then
+                            UV=$(command -v uv)
+                        else
+                            echo "Installation finished, but uv was not found in the expected location." >&2
+                            echo "Please open a new terminal or add ~/.local/bin or ~/.cargo/bin to your PATH, then retry." >&2
+                            exit 1
+                        fi
+                    else
+                        echo "Automatic uv installation failed." >&2
+                        echo "Please install uv manually: https://docs.astral.sh/uv" >&2
+                        exit 1
+                    fi
+                    ;;
+                *)
+                    echo "uv is required to run this project." >&2
+                    echo "Please install uv manually: https://docs.astral.sh/uv" >&2
+                    exit 1
+                    ;;
+            esac
+        else
+            echo "This is a non-interactive shell; cannot prompt to install uv." >&2
+            echo "Please install uv manually: https://docs.astral.sh/uv" >&2
+            exit 1
+        fi
     fi
 
-    if [ -n "$UV" ] && [ -f "pyproject.toml" ]; then
-        # Let uv use its own project environment (typically .venv). Do not set
-        # VIRTUAL_ENV to a different path, because uv ignores it and warns.
-        PYRUN="$UV run"
-        PYTHON="$UV run python"
-    elif [ -d "${PWD}/venv" ]; then
-        # Legacy pip path.
-        # shellcheck source=/dev/null
-        source "${PWD}/venv/bin/activate"
-        PYRUN=""
-        PYTHON="python"
-        UV=""
-    else
-        echo "ERROR: No Python environment found." >&2
-        echo "Install uv (https://docs.astral.sh/uv) or create a virtual environment:" >&2
-        echo "  python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt" >&2
-        exit 1
-    fi
-
+    PYRUN="$UV run"
+    PYTHON="$UV run python"
     export UV PYTHON PYRUN
 }
