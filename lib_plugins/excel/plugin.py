@@ -11,6 +11,26 @@ def register_plugin(main_window: QtWidgets.QMainWindow, plugins_menu: QtWidgets.
     action = submenu.addAction("Select Workbook…")
 
     def _run_import() -> None:
+        # ARCHITECTURE_DEBT: the Excel plugin still needs direct Engine access
+        # until import is exposed as a command through the command spine. The
+        # engine lives on the local session context, not on MainWindow itself.
+        if main_window.is_remote:  # type: ignore[attr-defined]
+            QtWidgets.QMessageBox.warning(
+                main_window,
+                "Import unavailable",
+                "Excel import is not supported in remote session mode.",
+            )
+            return
+        ctx = main_window.session.context  # type: ignore[attr-defined]
+        if ctx is None:
+            QtWidgets.QMessageBox.warning(
+                main_window,
+                "Import unavailable",
+                "No active session context is available for import.",
+            )
+            return
+        engine = ctx.engine
+
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             main_window,
             "Import Excel (lite)",
@@ -24,7 +44,7 @@ def register_plugin(main_window: QtWidgets.QMainWindow, plugins_menu: QtWidgets.
 
         # Create worker thread for import
         worker = ImportWorker(
-            main_window._engine,  # type: ignore[attr-defined]
+            engine,
             path,
             streaming_threshold_mb=5.0,
         )

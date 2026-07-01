@@ -105,10 +105,6 @@ cd om-core
 .\start.ps1
 ```
 
-A `start.bat` file is also included, but `start.ps1` is recommended because it
-handles environment resolution, line endings, and signal differences more
-reliably on Windows.
-
 `./start.sh` or `.\start.ps1` starts the GUI and asks whether to open a TUI in a
 separate terminal.
 
