@@ -87,26 +87,52 @@ changed to load these defaults from another documented location.
 
 OM Core currently runs from source.
 
+### Linux / macOS
+
 ```bash
 git clone https://github.com/cloudcell/om-core.git
 cd om-core
 ./start.sh
 ```
 
-`./start.sh` starts the GUI and asks whether to open a TUI in a separate terminal.
+### Windows
+
+Use PowerShell:
+
+```powershell
+git clone https://github.com/cloudcell/om-core.git
+cd om-core
+.\start.ps1
+```
+
+A `start.bat` file is also included, but `start.ps1` is recommended because it
+handles environment resolution, line endings, and signal differences more
+reliably on Windows.
+
+`./start.sh` or `.\start.ps1` starts the GUI and asks whether to open a TUI in a
+separate terminal.
 
 OM Core uses [uv](https://docs.astral.sh/uv) to manage its Python environment.
 Install uv, then run `uv sync` in the project root to create `.venv` and install
-dependencies. After that, `./start.sh` and the test scripts use `uv run`
+dependencies. After that, the start scripts and test scripts use `uv run`
 automatically.
 
 You can also start specific runtime modes:
 
 ```bash
+# Linux / macOS
 ./start.sh --gui       # graphical interface only
 ./start.sh --tui       # terminal interface in the current terminal
 ./start.sh --runtime   # headless runtime only
 ./start.sh --repl      # REPL command shell in the current terminal
+```
+
+```powershell
+# Windows
+.\start.ps1 --gui       # graphical interface only
+.\start.ps1 --tui       # terminal interface in the current terminal
+.\start.ps1 --runtime   # headless runtime only
+.\start.ps1 --repl      # REPL command shell in the current terminal
 ```
 
 For more detail, see the installation guide:
@@ -115,13 +141,13 @@ https://cloudcell.github.io/om-docs/start/installation/
 
 ## Quickstart
 
-Running `./start.sh` launches the GUI. You will be prompted to open a TUI in a
-separate terminal; accepting the default (`Y`) gives you a command shell alongside
-the GUI, as shown below.
+Running `./start.sh` (Linux / macOS) or `.\start.ps1` (Windows) launches the GUI.
+You will be prompted to open a TUI in a separate terminal; accepting the default
+(`Y`) gives you a command shell alongside the GUI, as shown below.
 
-> **Note:** The first time you run `./start.sh`, `uv` will create a Python virtual
-> environment in the project folder (`.venv`) and install dependencies from
-> `uv.lock`.
+> **Note:** The first time you run `./start.sh` or `.\start.ps1`, `uv` will create
+> a Python virtual environment in the project folder (`.venv`) and install
+> dependencies from `uv.lock`.
 
 ![OM Core GUI and TUI running together](tech-ref/assets/om-core-gui-and-tui.png)
 
@@ -168,6 +194,20 @@ om> source hello.openm
 For the full walkthrough, see:
 
 https://cloudcell.github.io/om-docs/start/quickstart/
+
+## Testing
+
+Run the test suite with the platform-specific script:
+
+```bash
+# Linux / macOS
+./test.sh
+```
+
+```powershell
+# Windows
+.\test.ps1
+```
 
 ## Architecture
 
