@@ -1,0 +1,45 @@
+[project]
+name = "om-core"
+version = "0.1.1-alpha.1"
+description = "Open-source reference implementation of a multidimensional modeling engine"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "GNU Affero General Public License v3.0" }
+authors = [
+    { name = "CloudCell" },
+]
+keywords = ["modeling", "multidimensional", "spreadsheet-alternative", "rules", "cube"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "PySide6==6.11.0",
+    "pytest==9.0.3",
+    "xlrd==2.0.2",
+    "pytest-qt==4.5.0",
+    "msgpack==1.1.2",
+    "tqdm==4.67.3",
+    "prompt_toolkit==3.0.52",
+    "blessed==1.44.0",
+    "pytest-timeout==2.4.0",
+    "pytest-xdist==3.8.0",
+    "Cython==3.2.5",
+    "pympler==1.1",
+    "radon==6.0.1",
+    "py-spy==0.4.2",
+]
+
+[project.urls]
+Homepage = "https://cloudcell.github.io/om-docs/"
+Repository = "https://github.com/cloudcell/om-core"
+Issues = "https://github.com/cloudcell/om-core/issues"
+
+[tool.uv]
+# OM Core is an application, not an installable Python package.
+package = false

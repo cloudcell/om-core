@@ -3,10 +3,13 @@ set -e
 
 # Prevent Qt tests from opening visible windows during headless/CI runs
 export QT_QPA_PLATFORM=offscreen
-PYTHON="./venv/bin/python"
+
+cd "$(dirname "$0")"
+source scripts/resolve_python_env.sh
+resolve_python_env
 
 echo "=== Running tests sequentially ==="
-"$PYTHON" -m pytest tests/
+$PYTHON -m pytest tests/
 echo ""
 
 

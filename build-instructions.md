@@ -9,6 +9,12 @@ source ./venv/bin/activate
 python scripts/build_release.py
 ```
 
+Or, if you are using `uv`:
+
+```bash
+uv run python scripts/build_release.py
+```
+
 Optional flags:
 
 ```bash
@@ -36,6 +42,12 @@ cd /path/to/install
 ```powershell
 .\venv\Scripts\activate
 python scripts\build_release_windows.py
+```
+
+Or, if you are using `uv`:
+
+```powershell
+uv run python scripts\build_release_windows.py
 ```
 
 Optional flags:

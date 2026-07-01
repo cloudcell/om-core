@@ -94,6 +94,9 @@ cd om-core
 ```
 
 `./start.sh` starts the GUI and asks whether to open a TUI in a separate terminal.
+If [uv](https://docs.astral.sh/uv) is installed, the launcher and test scripts use
+`uv run` automatically. The legacy `venv` + `pip` path remains supported during the
+interim migration period.
 
 You can also start specific runtime modes:
 

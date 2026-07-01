@@ -14,12 +14,9 @@ if [ "$1" = "--ci" ]; then
     CI_MODE=true
 fi
 
-# Use venv Python if available
-if [ -f "venv/bin/python" ]; then
-    PYTHON="venv/bin/python"
-else
-    PYTHON="python"
-fi
+# Use project Python environment (prefers uv; falls back to ./venv).
+source scripts/resolve_python_env.sh
+resolve_python_env
 
 # Set Qt platform for headless testing
 if [ "$CI_MODE" = true ] || [ -z "$DISPLAY" ]; then
