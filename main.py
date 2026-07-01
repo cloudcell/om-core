@@ -260,7 +260,9 @@ def _run_gui_only():
     from PySide6 import QtWidgets, QtCore, QtGui
     _mark('PySide6 imported')
     app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("OM")
+    app.setApplicationName("OM Core")
+    if sys.platform == "darwin":
+        app.setApplicationDisplayName("OM Core")
     _mark('QApplication created')
 
     # Set the bundled logo as the application icon so the splash/taskbar show it.
