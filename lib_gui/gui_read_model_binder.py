@@ -23,6 +23,13 @@ from __future__ import annotations
 from typing import Any, Callable
 
 
+def _payload_value(payload: Any, key: str, default: Any = None) -> Any:
+    """Read a value from a dict or dataclass payload."""
+    if isinstance(payload, dict):
+        return payload.get(key, default)
+    return getattr(payload, key, default)
+
+
 class GUIReadModelBinder:
     """Subscribe to workspace events and update GUIViewModel.
 
@@ -184,7 +191,7 @@ class GUIReadModelBinder:
 
     def _on_dimension_structure_changed(self, event) -> None:
         """Re-query dimension detail when groups, outlines, or items change."""
-        dim_id = event.payload.get("dim_id")
+        dim_id = _payload_value(event.payload, "dim_id")
         if dim_id:
             result = self.session.execute(
                 "query", type="dimension_detail", dim_id=dim_id
