@@ -31,6 +31,28 @@ if (-not $Uv) {
     exit 1
 }
 
+# Ensure a project-compatible Python interpreter is installed.
+function Ensure-Python {
+    $pySpec = "3.12"
+    $pyprojectPath = Join-Path $ScriptDir "pyproject.toml"
+    if (Test-Path $pyprojectPath) {
+        $line = Get-Content $pyprojectPath | Select-String '^requires-python' | Select-Object -First 1
+        if ($line -match '([0-9]+\.[0-9]+)') {
+            $pySpec = $matches[1]
+        }
+    }
+    & $Uv python find $pySpec | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Python $pySpec not found; installing via uv..."
+        & $Uv python install $pySpec
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to install Python $pySpec via uv."
+            exit 1
+        }
+    }
+}
+Ensure-Python
+
 Write-Host "=== Running tests sequentially ==="
 & $Uv run python -m pytest tests/
 
