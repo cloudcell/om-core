@@ -93,14 +93,14 @@ class TimelinePanel(QtWidgets.QDockWidget):
         self._payload_restorer: Optional[Callable] = None  # Stored for controller recreation
         self._session: Any = None  # CommandSession for bus-based checkpoint/restore
         
-        # Initialize controller (mock or real datastore based on feature flag)
+        # Initialize controller. Before a workspace is known we use a mock
+        # provider so the panel does not create stray timeline_session_*.sqlite
+        # files. switch_to_workspace_session will recreate a real provider once
+        # the canonical ws_<workspace_id>.timeline.sqlite path is supplied.
         logger.info("creating controller...")
-        if USE_REAL_DATASTORE:
-            self._session_file = _generate_session_file()
-            logger.info(f"New session file: {self._session_file}")
         self._controller: TimelineController = create_controller(
-            use_real_datastore=USE_REAL_DATASTORE,
-            session_file=self._session_file
+            use_real_datastore=False,
+            session_file=None
         )
         logger.info(f"controller created: type={type(self._controller).__name__}")
         
@@ -331,28 +331,23 @@ class TimelinePanel(QtWidgets.QDockWidget):
 
     def switch_to_workspace_session(
         self,
-        workspace_path: str | None = None,
         *,
         session_file: Path | None = None,
     ) -> None:
-        """Switch to a workspace-specific session file so timeline persists across restarts.
+        """Switch to the canonical workspace session file.
+
+        The timeline store path must be derived from the stable workspace ID by
+        the caller (``<SESSIONS_DIR>/ws_<workspace_id>.timeline.sqlite``). This
+        keeps the panel aligned with SQLiteSnapshotStoreAdapter and the
+        command-layer checkpoint service.
 
         Args:
-            workspace_path: Path to the workspace JSON file. Session file is derived
-                as ``<SESSIONS_DIR>/<workspace_stem>.timeline.openm``.
-            session_file: Optional explicit session file path (overrides derivation
-                from workspace_path). Used in remote mode where workspace file path
-                is not known, but a deterministic session file is still needed.
+            session_file: Explicit canonical session file path. Must be supplied
+                when USE_REAL_DATASTORE is True. No workspace-stem fallback is
+                performed because the filename must be keyed by workspace ID.
         """
         if not USE_REAL_DATASTORE:
             return
-
-        if session_file is None and workspace_path is not None:
-            workspace_file = Path(workspace_path)
-            # Keep timeline sessions in the canonical sessions directory, not
-            # scattered next to workspace files in the project root.
-            SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-            session_file = SESSIONS_DIR / f"{workspace_file.stem}.timeline.sqlite"
 
         if session_file is None:
             return
