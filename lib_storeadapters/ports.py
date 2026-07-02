@@ -39,6 +39,8 @@ class SnapshotInfo:
     created_at: datetime  # UTC, timezone-aware
     content_hash: str | None = None
     branch_id: BranchId | None = None
+    parent_id: SnapshotId | None = None
+    is_delta: bool = False
 
 
 @dataclass(frozen=True)
@@ -164,4 +166,18 @@ class SnapshotStoreAdapter(ABC):
         self, workspace_id: WorkspaceId, branch_id: BranchId
     ) -> bool:
         """Switch the current branch. Return True on success."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_snapshot_branch(
+        self, workspace_id: WorkspaceId, snapshot_id: SnapshotId, branch_id: BranchId
+    ) -> bool:
+        """Update a snapshot's branch assignment without touching its payload."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_snapshot_parent(
+        self, workspace_id: WorkspaceId, snapshot_id: SnapshotId, parent_id: SnapshotId | None
+    ) -> bool:
+        """Update a snapshot's parent_id and, for delta snapshots, its base."""
         raise NotImplementedError

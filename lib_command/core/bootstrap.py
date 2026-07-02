@@ -16,6 +16,7 @@ from ..commands import (
     cmd_cancel_recalc, cmd_set_dependency_tracking, cmd_clear_cache,
     cmd_undo, cmd_redo,
     cmd_checkpoint, cmd_restore,
+    cmd_rename_checkpoint, cmd_delete_checkpoint,
 )
 from ..commands.model import (
     cmd_clear_dimension_outline,
@@ -259,6 +260,26 @@ def register_default_commands(registry: CommandRegistry | None = None) -> Comman
             cmd_restore_checkpoint,
             description="Restore workspace to a timeline snapshot",
             params={"snapshot_id": str}
+        )
+
+    if not registry.is_registered("rename_checkpoint"):
+        registry.register(
+            "rename_checkpoint",
+            "Rename Checkpoint",
+            CommandCategory.SYSTEM,
+            cmd_rename_checkpoint,
+            description="Rename a timeline checkpoint",
+            params={"checkpoint_id": str, "description": str}
+        )
+
+    if not registry.is_registered("delete_checkpoint"):
+        registry.register(
+            "delete_checkpoint",
+            "Delete Checkpoint",
+            CommandCategory.SYSTEM,
+            cmd_delete_checkpoint,
+            description="Delete a timeline checkpoint",
+            params={"checkpoint_id": str}
         )
 
     # Legacy aliases (same handler, mapped for lifecycle normalization)

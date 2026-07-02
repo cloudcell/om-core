@@ -21,6 +21,8 @@ from lib_storeadapters.ports import (
     WorkspaceId,
     WorkspaceLike,
 )
+from lib_timelinewidget.engine import TimelineEngine
+from lib_timelinewidget.models import SnapshotInfo as WidgetSnapshotInfo
 
 
 @dataclass
@@ -145,10 +147,7 @@ class TimelineService:
         source_desc = self._get_source_description(workspace_id, checkpoint_id)
         desc = new_description or f"Restored from {source_desc or checkpoint_id[:8]}"
         # Restored snapshots always continue on the main branch so that the
-        # datastore's current branch is reset to main. If the target was on an
-        # alternative branch, the panel/visual restructure will promote it back
-        # to main; keeping the restored snapshot on main avoids leaving the
-        # current branch stuck on an alternative branch.
+        # datastore's current branch is reset to main.
         restored_id = self._snapshot_adapter.create_snapshot(
             workspace_id=workspace_id,
             workspace=workspace,
@@ -158,6 +157,15 @@ class TimelineService:
             parent_id=SnapshotId(checkpoint_id),
         )
 
+        # Restructure the timeline so future snapshots move to a single alt
+        # branch and the restored snapshot sits on the main spine.
+        self._restructure_after_restore(workspace_id, checkpoint_id, restored_id)
+
+        # The restored snapshot is the new head of the main branch; ensure the
+        # datastore current branch reflects that so subsequent checkpoints and
+        # visual rendering are consistent.
+        self._snapshot_adapter.switch_branch(workspace_id, BranchId("main"))
+
         return RestoredTimelineState(
             workspace=workspace,
             diagnostics={
@@ -166,9 +174,76 @@ class TimelineService:
             },
         )
 
+    def _restructure_after_restore(
+        self,
+        workspace_id: WorkspaceId,
+        checkpoint_id: str,
+        restored_id: SnapshotId,
+    ) -> None:
+        """Move future snapshots to alt branch and keep restored snapshot on main."""
+        snapshots = self._snapshot_adapter.list_snapshots(workspace_id)
+        if not snapshots:
+            return
+
+        original_state = {
+            str(s.snapshot_id): {
+                "branch_id": s.branch_id,
+                "parent_id": s.parent_id,
+            }
+            for s in snapshots
+        }
+
+        def _to_widget(s) -> WidgetSnapshotInfo:
+            return WidgetSnapshotInfo(
+                snapshot_id=str(s.snapshot_id),
+                parent_id=str(s.parent_id) if s.parent_id is not None else None,
+                description=s.description,
+                branch_name=str(s.branch_id) if s.branch_id is not None else "main",
+                created_at=s.created_at,
+                type=SnapshotType(s.snapshot_type.value),
+            )
+
+        engine = TimelineEngine()
+        engine.load_snapshots([_to_widget(s) for s in snapshots])
+        engine.restructure_for_restore(checkpoint_id, str(restored_id))
+
+        for s in engine.get_snapshots():
+            sid = s.snapshot_id
+            state = original_state.get(sid, {})
+            new_branch = BranchId(s.branch_name)
+            old_branch = state.get("branch_id")
+            if old_branch is None or str(old_branch) != str(new_branch):
+                self._snapshot_adapter.update_snapshot_branch(
+                    workspace_id, SnapshotId(sid), new_branch
+                )
+            new_parent = SnapshotId(s.parent_id) if s.parent_id is not None else None
+            old_parent = state.get("parent_id")
+            if old_parent != new_parent:
+                self._snapshot_adapter.update_snapshot_parent(
+                    workspace_id, SnapshotId(sid), new_parent
+                )
+
     def load_snapshots(self) -> list[Any]:
         """Load all snapshots for display."""
         return self._snapshot_adapter.list_snapshots(self._get_workspace_id())
+
+    def rename_checkpoint(
+        self, checkpoint_id: str, description: str
+    ) -> dict[str, str]:
+        """Rename a checkpoint snapshot."""
+        workspace_id = self._get_workspace_id()
+        self._snapshot_adapter.rename_snapshot(
+            workspace_id, SnapshotId(checkpoint_id), description
+        )
+        return {"checkpoint_id": checkpoint_id, "description": description}
+
+    def delete_checkpoint(self, checkpoint_id: str) -> dict[str, str]:
+        """Delete a checkpoint snapshot."""
+        workspace_id = self._get_workspace_id()
+        self._snapshot_adapter.delete_snapshot(
+            workspace_id, SnapshotId(checkpoint_id)
+        )
+        return {"checkpoint_id": checkpoint_id}
 
     def create_branch(self, branch_name: str) -> BranchId:
         """Create a new branch for the current workspace."""

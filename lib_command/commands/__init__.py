@@ -22,7 +22,12 @@ from .system import (
 )
 from .rule import cmd_rule
 from .query import cmd_query
-from .timeline import cmd_checkpoint, cmd_restore
+from .timeline import (
+    cmd_checkpoint,
+    cmd_restore,
+    cmd_rename_checkpoint,
+    cmd_delete_checkpoint,
+)
 
 # Main set command dispatcher
 from .dispatcher import cmd_set
@@ -48,5 +53,8 @@ __all__ = [
     # Query
     "cmd_query",
     # Timeline
-    "cmd_checkpoint", "cmd_restore",
+    "cmd_checkpoint",
+    "cmd_restore",
+    "cmd_rename_checkpoint",
+    "cmd_delete_checkpoint",
 ]

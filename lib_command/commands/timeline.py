@@ -190,3 +190,73 @@ def cmd_restore_checkpoint(ctx, snapshot_id: str, new_description: Optional[str]
     Thin wrapper around :func:`cmd_restore` for canonical naming.
     """
     return cmd_restore(ctx, snapshot_id, new_description)
+
+
+def cmd_rename_checkpoint(
+    ctx, checkpoint_id: str, description: str
+) -> dict[str, str]:
+    """Rename a timeline checkpoint.
+
+    Args:
+        checkpoint_id: Snapshot ID to rename.
+        description: New human-readable description.
+
+    Returns:
+        Dict with ``checkpoint_id`` and ``description`` on success.
+    """
+    timeline = _get_timeline_service(ctx)
+    result = timeline.rename_checkpoint(
+        checkpoint_id=checkpoint_id, description=description
+    )
+
+    ctx.status(f"Checkpoint renamed: {checkpoint_id}")
+
+    try:
+        publisher = BusEventPublisher()
+        publisher.publish(
+            topic_suffix="workspace.checkpoint_renamed",
+            payload={
+                "checkpoint_id": checkpoint_id,
+                "description": description,
+                "workspace_id": getattr(ctx.workspace, "id", None),
+            },
+            engine=ctx.engine,
+            correlation_id=ctx.correlation_id,
+            session_id=ctx.session_id,
+        )
+    except Exception:
+        pass  # Event emission failure is non-fatal
+
+    return result
+
+
+def cmd_delete_checkpoint(ctx, checkpoint_id: str) -> dict[str, str]:
+    """Delete a timeline checkpoint.
+
+    Args:
+        checkpoint_id: Snapshot ID to delete.
+
+    Returns:
+        Dict with ``checkpoint_id`` on success.
+    """
+    timeline = _get_timeline_service(ctx)
+    result = timeline.delete_checkpoint(checkpoint_id=checkpoint_id)
+
+    ctx.status(f"Checkpoint deleted: {checkpoint_id}")
+
+    try:
+        publisher = BusEventPublisher()
+        publisher.publish(
+            topic_suffix="workspace.checkpoint_deleted",
+            payload={
+                "checkpoint_id": checkpoint_id,
+                "workspace_id": getattr(ctx.workspace, "id", None),
+            },
+            engine=ctx.engine,
+            correlation_id=ctx.correlation_id,
+            session_id=ctx.session_id,
+        )
+    except Exception:
+        pass  # Event emission failure is non-fatal
+
+    return result

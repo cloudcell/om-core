@@ -1387,20 +1387,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def _switch_timeline_to_workspace_session(self) -> None:
-        """Switch timeline to a workspace-specific session file.
+        """Request a timeline refresh for the current workspace.
 
-        Queries the workspace identity and derives a deterministic session
-        file path so that multiple GUI instances share the same timeline.
+        The panel is a pure client: it reads snapshots through the query spine
+        and does not manage the timeline SQLite file path directly. We just ask
+        it to reload.
         """
         if not self._dock_timeline:
             return
         try:
-            ws_data = self.session.query("workspace_snapshot") or {}
-            ws_id = ws_data.get("id")
-            if ws_id:
-                from lib_utils.paths import OM_SESSIONS_DIR
-                session_file = OM_SESSIONS_DIR / f"ws_{ws_id}.timeline.sqlite"
-                self._dock_timeline.switch_to_workspace_session(session_file=session_file)
+            self._dock_timeline.reload()
         except Exception:
             pass  # Timeline falls back to fresh Session Start
 

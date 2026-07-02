@@ -34,6 +34,8 @@ QUERY_TYPE_TO_TOPIC: dict[str, str] = {
     "workspace_summary": "query.workspace.summary",
     "workspace_snapshot": "query.workspace.snapshot",
     "workspace_rules": "query.workspace.rules",
+    # Timeline domain
+    "timeline_snapshots": "query.timeline.snapshots",
     # Dimension domain
     "dimension_detail": "query.dimension.detail",
     "dimension_list": "query.dimension.list",

@@ -2,45 +2,28 @@
 
 Provides TimelineDockManager for MainWindow integration.
 Uses lib_timelinewidget for the actual timeline visualization.
+
+The panel is a pure client: all timeline reads go through the query spine and
+all writes go through the command spine. It does not open the timeline SQLite
+file directly.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional, List, Callable
-
-# Add parent directory to path so lib_timelinewidget can be found without installation
-_file_path = Path(__file__).resolve()
-_project_root = _file_path.parent.parent
-if str(_project_root) not in sys.path:
-    sys.path.insert(0, str(_project_root))
+from typing import Any, Optional, List, Callable
+from datetime import datetime, timezone
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from lib_timelinewidget import TimelineWidget, SnapshotInfo, SnapshotType
 from lib_timelinewidget.engine import TimelineEngine
-from lib_timeline.controllers import TimelineController, create_controller, MockProvider
-from datetime import datetime, timezone
-import uuid
+from lib_command.dto.timeline import TimelineSnapshotDTO
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Feature flag: Set to True to use real datastore persistence
-# When False, uses mock provider (backward compatible, no persistence)
-USE_REAL_DATASTORE = True
-
-from lib_utils.paths import OM_SESSIONS_DIR
-
-# Session storage directory (used when USE_REAL_DATASTORE=True)
-SESSIONS_DIR = OM_SESSIONS_DIR
-
-def _generate_session_file() -> Path:
-    """Generate a unique session file path with UUID to prevent collisions."""
-    session_id = str(uuid.uuid4())
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    return SESSIONS_DIR / f"timeline_session_{session_id}.sqlite"
 
 
 class TimelinePanel(QtWidgets.QDockWidget):
@@ -62,11 +45,9 @@ class TimelinePanel(QtWidgets.QDockWidget):
 
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
         super().__init__("Timeline", parent)
-        
+
         logger.info("__init__() starting...")
-        logger.info(f"USE_REAL_DATASTORE={USE_REAL_DATASTORE}")
-        logger.info(f"SESSIONS_DIR={SESSIONS_DIR}")
-        
+
         # Required for QMainWindow.saveState() to save/restore dock position
         self.setObjectName("TimelineDock")
 
@@ -88,23 +69,14 @@ class TimelinePanel(QtWidgets.QDockWidget):
         self._current_branch: str = "main"
         self._last_snapshot_id: Optional[str] = None
         self._restore_in_progress: bool = False  # Prevent concurrent restores
-        self._session_file: Optional[Path] = None  # Current session file path
-        self._payload_generator: Optional[Callable] = None  # Stored for controller recreation
-        self._payload_restorer: Optional[Callable] = None  # Stored for controller recreation
         self._session: Any = None  # CommandSession for bus-based checkpoint/restore
-        
-        # Initialize controller. Before a workspace is known we use a mock
-        # provider so the panel does not create stray timeline_session_*.sqlite
-        # files. switch_to_workspace_session will recreate a real provider once
-        # the canonical ws_<workspace_id>.timeline.sqlite path is supplied.
-        logger.info("creating controller...")
-        self._controller: TimelineController = create_controller(
-            use_real_datastore=False,
-            session_file=None
-        )
-        logger.info(f"controller created: type={type(self._controller).__name__}")
-        
-        self._init_session_start()  # Create initial snapshot
+
+        # Polling timer: in multi-window / multi-process setups the local bus
+        # may not see checkpoints created by another process. Poll the canonical
+        # datastore so the panel eventually converges.
+        self._poll_interval_ms: int = 2000
+        self._refresh_timer = QtCore.QTimer(self)
+        self._refresh_timer.timeout.connect(self._poll_datastore)
 
         # Central widget containing the timeline
         self._container = QtWidgets.QWidget()
@@ -146,12 +118,7 @@ class TimelinePanel(QtWidgets.QDockWidget):
         self.resize(350, 400)  # Default size
         
         logger.info("__init__() complete")
-        if USE_REAL_DATASTORE and self._session is None:
-            logger.info(
-                "Timeline panel has no command session yet; direct controller "
-                "fallback snapshots need payload callbacks to capture workspace state."
-            )
-    
+
     def _create_info_panel(self) -> QtWidgets.QFrame:
         """Create info panel showing selected snapshot details."""
         panel = QtWidgets.QFrame()
@@ -242,7 +209,7 @@ class TimelinePanel(QtWidgets.QDockWidget):
         return layout
     
     def _init_session_start(self):
-        """Initialize session - load existing snapshots from datastore.
+        """Initialize session - load existing snapshots via the query spine.
 
         The panel only *displays* snapshots; it does not create them.
         Snapshot creation is the composition root's responsibility
@@ -251,16 +218,7 @@ class TimelinePanel(QtWidgets.QDockWidget):
         """
         logger.debug("_init_session_start() called")
         self._current_branch = "main"
-
-        existing_snapshots = self._controller.load_snapshots()
-        if existing_snapshots:
-            logger.info(f"Loaded {len(existing_snapshots)} existing snapshots from datastore")
-            self._snapshots = existing_snapshots
-            self._last_snapshot_id = existing_snapshots[-1].snapshot_id
-        else:
-            logger.info("No existing snapshots — timeline starts empty")
-            self._snapshots = []
-            self._last_snapshot_id = None
+        self._reload_snapshots()
 
     def _on_new_session_requested(self):
         """Handle new session request - asks for permission via signal."""
@@ -282,45 +240,9 @@ class TimelinePanel(QtWidgets.QDockWidget):
 
     def _do_start_new_session(self):
         """Actually start new session (internal use only - requires permission first)."""
-        # Capture callbacks from the old controller before discarding it.
-        # The panel's own _payload_generator may be None because
-        # set_payload_callbacks() is owned by TimelineService, not the panel.
-        old_controller = getattr(self, '_controller', None)
-        old_engine = getattr(old_controller, '_engine', None)
-        old_generator = getattr(old_engine, '_payload_generator', None) if old_engine else None
-        old_restorer = getattr(old_engine, '_payload_restorer', None) if old_engine else None
-
-        # Generate a new unique session file to avoid collisions
-        if USE_REAL_DATASTORE:
-            self._session_file = _generate_session_file()
-            logger.info(f"New session file for new session: {self._session_file}")
-            # Recreate controller with new session file
-            self._controller = create_controller(
-                use_real_datastore=USE_REAL_DATASTORE,
-                session_file=self._session_file
-            )
-            logger.info("Controller recreated for new session")
-
-            # Reapply stored payload callbacks if available
-            if old_generator and old_restorer:
-                logger.info("Reapplying stored payload callbacks...")
-                self._controller.set_payload_callbacks(old_generator, old_restorer)
-                # Also mirror onto panel storage so future recreations can find them
-                self._payload_generator = old_generator
-                self._payload_restorer = old_restorer
-            elif self._payload_generator and self._payload_restorer:
-                logger.info("Reapplying panel-stored payload callbacks...")
-                self._controller.set_payload_callbacks(
-                    self._payload_generator,
-                    self._payload_restorer,
-                )
-
-        self._init_session_start()
-
-        # In manual mode the timeline starts empty; in auto mode the composition
-        # root (app_host / runtime_factory) creates the Session Start on startup.
-        # Either way, _init_session_start() only loads existing snapshots.
-        # The user must explicitly create a checkpoint to add the first snapshot.
+        self._snapshots = []
+        self._current_branch = "main"
+        self._last_snapshot_id = None
 
         self._timeline.set_snapshots(self._snapshots)
         self._timeline.update()
@@ -329,70 +251,14 @@ class TimelinePanel(QtWidgets.QDockWidget):
         """Start a new session (legacy - use _do_start_new_session with permission)."""
         self._do_start_new_session()
 
-    def switch_to_workspace_session(
-        self,
-        *,
-        session_file: Path | None = None,
-    ) -> None:
-        """Switch to the canonical workspace session file.
+    def reload(self) -> None:
+        """Reload snapshots from the query spine.
 
-        The timeline store path must be derived from the stable workspace ID by
-        the caller (``<SESSIONS_DIR>/ws_<workspace_id>.timeline.sqlite``). This
-        keeps the panel aligned with SQLiteSnapshotStoreAdapter and the
-        command-layer checkpoint service.
-
-        Args:
-            session_file: Explicit canonical session file path. Must be supplied
-                when USE_REAL_DATASTORE is True. No workspace-stem fallback is
-                performed because the filename must be keyed by workspace ID.
+        This is a public API for callers such as MainWindow to request a
+        refresh after a workspace switch or checkpoint event.
         """
-        if not USE_REAL_DATASTORE:
-            return
+        self._reload_snapshots()
 
-        if session_file is None:
-            return
-
-        if self._session_file == session_file:
-            # Already using this session file — just reload snapshots
-            self._init_session_start()
-            self._timeline.set_snapshots(self._snapshots)
-            self._timeline.update()
-            return
-
-        self._session_file = session_file
-        logger.info(f"Switching to workspace session file: {self._session_file}")
-
-        # Capture callbacks from the old controller before discarding it
-        old_controller = getattr(self, '_controller', None)
-        old_engine = getattr(old_controller, '_engine', None)
-        old_generator = getattr(old_engine, '_payload_generator', None) if old_engine else None
-        old_restorer = getattr(old_engine, '_payload_restorer', None) if old_engine else None
-
-        # Recreate controller with the workspace-specific session file
-        self._controller = create_controller(
-            use_real_datastore=USE_REAL_DATASTORE,
-            session_file=self._session_file
-        )
-        logger.info(f"Controller recreated for workspace session: {type(self._controller).__name__}")
-
-        # Reapply stored payload callbacks if available
-        if old_generator and old_restorer:
-            self._controller.set_payload_callbacks(old_generator, old_restorer)
-            self._payload_generator = old_generator
-            self._payload_restorer = old_restorer
-        elif self._payload_generator and self._payload_restorer:
-            self._controller.set_payload_callbacks(
-                self._payload_generator,
-                self._payload_restorer,
-            )
-
-        self._init_session_start()
-
-        # Backfill Session Start with actual workspace state if callbacks are wired
-        self._update_session_start_payload()
-
-        self._timeline.set_snapshots(self._snapshots)
-        self._timeline.update()
 
     def _get_main_branch_leaf(self) -> Optional[str]:
         """Find the leaf snapshot of the main branch (the one with no children on main)."""
@@ -421,47 +287,12 @@ class TimelinePanel(QtWidgets.QDockWidget):
         main_leaf_candidates.sort(key=lambda s: s.created_at)
         return main_leaf_candidates[-1].snapshot_id
 
-    def _do_create_checkpoint(self, description: str, branch: Optional[str] = None) -> str:
-        """Actually create checkpoint (internal use only - requires permission first)."""
-        branch = branch or self._current_branch
-
-        # Always extend from the main branch leaf, not the restored point
-        parent_id = self._get_main_branch_leaf()
-
-        snapshot = SnapshotInfo(
-            snapshot_id=self._generate_id(),
-            description=description,
-            branch_name=branch,
-            parent_id=parent_id,
-            created_at=datetime.now(timezone.utc),
-            type=SnapshotType.MANUAL
-        )
-
-        self._snapshots.append(snapshot)
-        self._last_snapshot_id = snapshot.snapshot_id
-
-        # Update timeline display
-        self._timeline.set_snapshots(self._snapshots)
-        self._timeline.update()
-
-        return snapshot.snapshot_id
-
-    def create_checkpoint(self, description: str, branch: Optional[str] = None) -> str:
-        """Create a new checkpoint/snapshot (legacy - use _do_create_checkpoint with permission).
-
-        Args:
-            description: User description for this checkpoint
-            branch: Branch name (defaults to current branch)
-
-        Returns:
-            The new snapshot ID
-        """
-        return self._do_create_checkpoint(description, branch)
-    
     def _generate_id(self) -> str:
         """Generate unique snapshot ID (full UUID)."""
-        return str(uuid.uuid4())
-    
+        from uuid import uuid4
+
+        return str(uuid4())
+
     def _init_mock_data(self):
         """Initialize with mock snapshot data for UI testing. (Deprecated - use start_new_session)"""
         from datetime import datetime, timedelta, timezone
@@ -517,9 +348,8 @@ class TimelinePanel(QtWidgets.QDockWidget):
             self._info_parent.setText(selected_snap.parent_id or "(root)")
             self._info_created.setText(selected_snap.created_at.strftime("%Y-%m-%d %H:%M:%S"))
         else:
-            # Snapshot not in our list - sync from controller and try again
-            # (This can happen if controller created snapshots internally)
-            self._snapshots = self._controller.load_snapshots()
+            # Snapshot not in our list - reload from query spine and try again
+            self._reload_snapshots()
             for snap in self._snapshots:
                 if snap.snapshot_id == snapshot_id:
                     desc = snap.description or "Untitled"
@@ -554,23 +384,22 @@ class TimelinePanel(QtWidgets.QDockWidget):
             text=current_description
         )
 
-        if ok and new_desc and new_desc != current_description:
-            # CRITICAL: Sync from controller first to get complete snapshot list
-            # (controller may have created "Restored from..." snapshots we don't know about)
-            self._snapshots = self._controller.load_snapshots()
+        if not ok or not new_desc or new_desc == current_description:
+            return
 
-            # Use controller for persistence (renames in datastore if enabled)
-            self._controller.rename_snapshot(snapshot_id, new_desc)
+        if not self._session:
+            logger.error("Cannot rename checkpoint: no CommandSession available")
+            return
 
-            # Find and update the snapshot
-            for snap in self._snapshots:
-                if snap.snapshot_id == snapshot_id:
-                    # Update description
-                    snap.description = new_desc
-                    # Refresh timeline
-                    self._timeline.set_snapshots(self._snapshots)
-                    self._timeline.update()
-                    break
+        result = self._session.execute(
+            "rename_checkpoint",
+            checkpoint_id=snapshot_id,
+            description=new_desc,
+        )
+        if result.success:
+            self._reload_snapshots()
+        else:
+            logger.error(f"rename_checkpoint failed: {getattr(result, 'error', 'unknown error')}")
 
     def _on_restore_requested(self, snapshot_id: str):
         """Handle restore request - asks for permission via signal.
@@ -581,15 +410,17 @@ class TimelinePanel(QtWidgets.QDockWidget):
         if self._restore_in_progress:
             return
 
+        if not self._session:
+            logger.error("Cannot restore checkpoint: no CommandSession available")
+            return
+
         callback_invoked = [False]
-        
+
         def on_permission_granted(approved: bool):
             callback_invoked[0] = True
             if approved:
                 self._do_restore(snapshot_id)
-            else:
-                pass  # Restore denied
-        
+
         # Emit the signal - handlers will call the callback
         self.restore_permission_requested.emit(snapshot_id, on_permission_granted)
 
@@ -603,76 +434,24 @@ class TimelinePanel(QtWidgets.QDockWidget):
         self._restore_in_progress = True
 
         try:
-            new_snapshot_id: Optional[str] = None
-
-            # Bus-based path: execute through command session so lifecycle events
-            # are published on the message bus.
-            if self._session:
-                logger.debug("executing restore via command session...")
-                result = self._session.execute(
-                    "restore_checkpoint",
-                    snapshot_id=snapshot_id,
-                )
-                if result.success and result.data:
-                    new_snapshot_id = result.data.get("new_snapshot_id")
-                    logger.debug(f"restore command succeeded: {new_snapshot_id}")
-                else:
-                    logger.error(f"restore command failed: {getattr(result, 'error', 'unknown error')}")
+            result = self._session.execute(
+                "restore_checkpoint",
+                snapshot_id=snapshot_id,
+            )
+            if result.success and result.data:
+                new_snapshot_id = result.data.get("new_snapshot_id")
+                logger.debug(f"restore_checkpoint succeeded: {new_snapshot_id}")
             else:
-                # Fallback: direct controller call (standalone / tests)
-                logger.debug("calling controller.restore_snapshot() directly...")
-                new_snapshot_id = self._controller.restore_snapshot(snapshot_id)
-                logger.debug(f"controller.restore_snapshot() returned: {new_snapshot_id}")
-            
-            if new_snapshot_id:
-                # Controller succeeded - sync snapshots and then do branch restructuring
-                # via timeline widget (which handles the visual branch folding WITHOUT creating duplicate)
-                logger.info(f"Controller restore succeeded: {new_snapshot_id}")
-                self._snapshots = self._controller.load_snapshots()
-                # Debug: show what we loaded
-                logger.info(f"Loaded {len(self._snapshots)} snapshots:")
-                for s in self._snapshots:
-                    logger.info(f"  {s.snapshot_id[:8]}: branch={s.branch_name}, desc={s.description[:30]}")
+                logger.error(f"restore_checkpoint failed: {getattr(result, 'error', 'unknown error')}")
+                return
 
-                # Capture original state before restructure mutates the snapshots in place
-                original_state = {
-                    s.snapshot_id: {"branch_name": s.branch_name, "parent_id": s.parent_id}
-                    for s in self._snapshots
-                }
-
-                self._timeline.set_snapshots(self._snapshots)
-                # Call restructure_for_restore to move future snapshots to alt branch
-                # This does NOT create a new "Restored from" snapshot (controller already did that)
-                # Pass new_snapshot_id so it knows which snapshot to keep on main
-                self._timeline.restructure_for_restore(snapshot_id, new_snapshot_id)
-                # Update datastore with new branch and parent assignments so they're persisted
-                logger.info("Updating datastore with new branch and parent assignments...")
-                for snap in self._timeline.get_snapshots():
-                    state = original_state.get(snap.snapshot_id, {})
-                    if snap.branch_name != state.get("branch_name"):
-                        self._controller.update_snapshot_branch(snap.snapshot_id, snap.branch_name)
-                    if snap.parent_id != state.get("parent_id"):
-                        self._controller.update_snapshot_parent(snap.snapshot_id, snap.parent_id)
-            else:
-                # Controller failed - surface error to user if possible, then fall back to widget
-                if self._session and hasattr(self._session, 'context') and self._session.context:
-                    try:
-                        self._session.context.status("Checkpoint restore failed — check console for details")
-                    except Exception:
-                        pass
-                logger.warning("Controller restore failed, using widget fallback")
-                new_snapshot_id = self._timeline.restore_to_snapshot(snapshot_id)
-
-            if new_snapshot_id:
-                self._last_snapshot_id = new_snapshot_id
-                # Refresh display with updated snapshots (including branch restructuring)
-                self._snapshots = self._timeline.get_snapshots()
-                self._timeline.set_snapshots(self._snapshots)
-                self._timeline.update()
-                # Select the newly created snapshot so info panel shows its details
-                self._on_node_selected(new_snapshot_id)
-            else:
-                pass  # Restore failed
+            # The command service restructured the datastore. Reload via query
+            # spine so the widget reflects the canonical state.
+            self._reload_snapshots()
+            self._last_snapshot_id = new_snapshot_id
+            self._timeline.set_snapshots(self._snapshots)
+            self._timeline.update()
+            self._on_node_selected(new_snapshot_id)
         finally:
             self._restore_in_progress = False
     
@@ -710,8 +489,7 @@ class TimelinePanel(QtWidgets.QDockWidget):
         logger.info(f"Total snapshots: {len(self._snapshots)}")
         logger.info(f"Current branch: {self._current_branch}")
         logger.info(f"Last snapshot ID: {self._last_snapshot_id}")
-        logger.info(f"Controller type: {type(self._controller).__name__}")
-        logger.info(f"Session file: {getattr(self._controller, 'get_session_file', lambda: 'N/A')()}")
+        logger.info(f"Has command session: {self._session is not None}")
         logger.info("Snapshots:")
         for i, snap in enumerate(self._snapshots):
             parent = snap.parent_id or "(root)"
@@ -724,70 +502,38 @@ class TimelinePanel(QtWidgets.QDockWidget):
         logger.info(f"_do_create_checkpoint() called: description={description!r}, branch={branch}")
         branch = branch or self._current_branch
 
-        # CRITICAL: Sync from controller first to get complete snapshot list
-        # (timeline widget may have stale data)
-        self._snapshots = self._controller.load_snapshots()
-        logger.info(f"synced {len(self._snapshots)} snapshots from controller")
+        if not self._session:
+            logger.error("Cannot create checkpoint: no CommandSession available")
+            return ""
 
-        # Always extend from the main branch leaf, not the restored point
+        # Reload to get the latest main-branch leaf.
+        self._reload_snapshots()
         parent_id = self._get_main_branch_leaf()
         logger.debug(f"parent_id={parent_id}")
 
-        snapshot_id: Optional[str] = None
+        result = self._session.execute(
+            "create_checkpoint",
+            description=description,
+            parent_id=parent_id,
+            branch=branch,
+        )
+        if not result.success or not result.data:
+            logger.error(f"create_checkpoint failed: {getattr(result, 'error', 'unknown error')}")
+            return ""
 
-        # Bus-based path: execute through command session so lifecycle events
-        # are published on the message bus.
-        if self._session:
-            logger.debug("executing checkpoint via command session...")
-            result = self._session.execute(
-                "create_checkpoint",
-                description=description,
-                parent_id=parent_id,
-                branch=branch,
-            )
-            if result.success and result.data:
-                snapshot_id = result.data.get("snapshot_id")
-                logger.debug(f"checkpoint command succeeded: {snapshot_id}")
-            else:
-                logger.error(f"checkpoint command failed: {getattr(result, 'error', 'unknown error')}")
-        else:
-            # Fallback: direct controller call (standalone / tests)
-            logger.debug("calling controller.create_snapshot() directly...")
-            snapshot_id = self._controller.create_snapshot(
-                description=description,
-                parent_id=parent_id
-            )
-            logger.debug(f"controller.create_snapshot() returned: {snapshot_id}")
-        
-        if not snapshot_id:
-            # Fallback to local creation if controller failed
-            logger.warning("controller failed, using fallback local generation")
-            snapshot_id = self._generate_id()
-        
-        # Get the full snapshot from controller to include is_delta and other metadata
-        created_snapshot = self._controller.get_snapshot(snapshot_id)
-        if created_snapshot:
-            snapshot = created_snapshot
-        else:
-            # Fallback: create local SnapshotInfo (won't have is_delta)
-            snapshot = SnapshotInfo(
-                snapshot_id=snapshot_id,
-                description=description,
-                branch_name=branch,
-                parent_id=parent_id,
-                created_at=datetime.now(timezone.utc),
-                type=SnapshotType.MANUAL
-            )
+        snapshot_id = result.data.get("snapshot_id")
+        logger.debug(f"create_checkpoint succeeded: {snapshot_id}")
 
-        self._snapshots.append(snapshot)
-        self._last_snapshot_id = snapshot.snapshot_id
+        # Reload so the new snapshot (including is_delta metadata) appears.
+        self._reload_snapshots()
+        if self._snapshots:
+            self._last_snapshot_id = self._snapshots[-1].snapshot_id
 
-        # Update timeline display
         self._timeline.set_snapshots(self._snapshots)
         self._timeline.update()
         logger.info(f"_do_create_checkpoint() COMPLETE: snapshot_id={snapshot_id}")
 
-        return snapshot.snapshot_id
+        return snapshot_id or ""
 
     # Public API for MainWindow integration
     def get_timeline_widget(self) -> TimelineWidget:
@@ -803,71 +549,127 @@ class TimelinePanel(QtWidgets.QDockWidget):
     def set_session(self, session: Any) -> None:
         """Set the command session for bus-based checkpoint/restore.
 
-        The panel calls session.execute(...) instead of executor.execute(...).
+        The panel calls session.execute(...) and session.query(...) on the bus.
         """
         self._session = session
+        self._subscribe_to_events()
+        self._reload_snapshots()
+        self._start_polling()
 
-    def get_controller(self) -> TimelineController:
-        """Get the timeline controller."""
-        return self._controller
+    def _subscribe_to_events(self) -> None:
+        """Subscribe to checkpoint lifecycle events so the panel refreshes."""
+        if not self._session:
+            return
+        for topic in (
+            "event.workspace.checkpoint_created",
+            "event.workspace.checkpoint_restored",
+            "event.workspace.checkpoint_renamed",
+            "event.workspace.checkpoint_deleted",
+        ):
+            try:
+                self._session.subscribe(topic, self._on_checkpoint_event)
+            except Exception as e:
+                logger.warning(f"Could not subscribe to {topic}: {e}")
 
-    def set_payload_callbacks(self, generator: Callable, restorer: Callable):
-        """Set callbacks for workspace serialization/restoration.
-        
-        Required when USE_REAL_DATASTORE=True to enable actual
-        workspace state capture and restoration.
-        
-        Args:
-            generator: Callable that returns workspace state dict
-            restorer: Callable that restores workspace from dict
+    def _on_checkpoint_event(self, event: Any) -> None:
+        """Refresh snapshots when checkpoint events arrive on the bus.
+
+        The event may be delivered from the transport client's polling thread, so
+        the actual UI refresh is scheduled on the Qt event loop to avoid unsafe
+        cross-thread widget updates.
         """
-        logger.info("set_payload_callbacks() called")
-        logger.debug(f"generator={generator}, restorer={restorer}")
-        
-        # Store callbacks for reapplication when controller is recreated
-        self._payload_generator = generator
-        self._payload_restorer = restorer
-        
-        self._controller.set_payload_callbacks(generator, restorer)
-        
-        # Update Session Start snapshot with actual workspace state if it exists
-        # and was created with an empty payload
-        self._update_session_start_payload()
-        
-        logger.info("set_payload_callbacks() complete - workspace WILL be saved to snapshots")
-    
-    def _update_session_start_payload(self):
-        """Update Session Start snapshot with current workspace state."""
-        if not self._snapshots:
+        QtCore.QTimer.singleShot(0, self._reload_snapshots)
+
+    def _start_polling(self) -> None:
+        """Start periodic refresh when the panel has a session and is visible."""
+        if self._session and self.isVisible() and not self._refresh_timer.isActive():
+            self._refresh_timer.start(self._poll_interval_ms)
+
+    def _stop_polling(self) -> None:
+        """Stop periodic refresh."""
+        if self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+
+    def _poll_datastore(self) -> None:
+        """Periodic poll: refresh if the canonical datastore changed."""
+        if not self._session or not self.isVisible():
+            self._stop_polling()
+            return
+        self._reload_snapshots()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        """Refresh and start polling when the dock becomes visible."""
+        super().showEvent(event)
+        self._reload_snapshots()
+        self._start_polling()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:
+        """Stop polling when the dock is hidden to save resources."""
+        super().hideEvent(event)
+        self._stop_polling()
+
+    def _snapshot_lists_equal(
+        self, a: List[SnapshotInfo], b: List[SnapshotInfo]
+    ) -> bool:
+        """Return True if two snapshot lists have the same IDs in the same order."""
+        if len(a) != len(b):
+            return False
+        return all(s1.snapshot_id == s2.snapshot_id for s1, s2 in zip(a, b))
+
+    def _reload_snapshots(self) -> None:
+        """Load snapshots via the query spine and convert to widget model."""
+        if not self._session:
+            logger.debug("No command session; snapshots remain empty")
+            self._snapshots = []
+            self._last_snapshot_id = None
+            self._timeline.set_snapshots(self._snapshots)
+            self._timeline.update()
             return
 
-        # Find Session Start snapshot
-        session_start = None
-        for snap in self._snapshots:
-            if snap.description == "Session Start":
-                session_start = snap
-                break
-
-        if not session_start:
-            return
-
-        # Check if the controller has a payload generator wired
-        engine = getattr(self._controller, '_engine', None)
-        payload_generator = getattr(engine, '_payload_generator', None) if engine else None
-        if payload_generator is None:
-            logger.debug("No payload generator available; skipping Session Start backfill")
-            return
-
-        logger.info("Updating Session Start payload with current workspace state...")
         try:
-            payload = payload_generator()
-            if payload:
-                self._controller.update_snapshot_payload(session_start.snapshot_id, payload)
-                logger.info("Session Start payload updated")
-            else:
-                logger.debug("Payload generator returned empty dict; skipping update")
+            dtos = self._session.query("timeline_snapshots") or []
         except Exception as e:
-            logger.error(f"Could not update Session Start: {e}")
+            logger.error(f"timeline_snapshots query failed: {e}")
+            dtos = []
+
+        new_snapshots = [self._dto_to_snapshot_info(dto) for dto in dtos]
+        if self._snapshot_lists_equal(self._snapshots, new_snapshots):
+            return
+
+        self._snapshots = new_snapshots
+        if self._snapshots:
+            self._last_snapshot_id = self._snapshots[-1].snapshot_id
+        else:
+            self._last_snapshot_id = None
+
+        self._timeline.set_snapshots(self._snapshots)
+        self._timeline.update()
+
+    @staticmethod
+    def _dto_to_snapshot_info(dto: TimelineSnapshotDTO) -> SnapshotInfo:
+        """Convert a neutral timeline DTO into a widget SnapshotInfo."""
+        try:
+            snap_type = SnapshotType(dto["snapshot_type"])
+        except ValueError:
+            snap_type = SnapshotType.MANUAL
+
+        created_at: datetime
+        try:
+            created_at = datetime.fromisoformat(dto["created_at"])
+        except ValueError:
+            created_at = datetime.now(timezone.utc)
+
+        return SnapshotInfo(
+            snapshot_id=dto["snapshot_id"],
+            parent_id=dto["parent_id"],
+            description=dto["description"],
+            branch_name=dto["branch_name"] or "main",
+            created_at=created_at,
+            type=snap_type,
+            is_delta=dto.get("is_delta", False),
+        )
+
+    # Public API for MainWindow integration
 
 
 class TimelineDockManager:
@@ -939,8 +741,6 @@ class TimelineDockManager:
 
 # For testing standalone
 if __name__ == "__main__":
-    import sys
-
     app = QtWidgets.QApplication(sys.argv)
 
     window = QtWidgets.QMainWindow()
@@ -953,15 +753,13 @@ if __name__ == "__main__":
     central_layout.addWidget(QtWidgets.QLabel("Main workspace area"))
     window.setCentralWidget(central)
 
-    # Add timeline
+    # Add timeline. In a real integration the panel receives a CommandSession
+    # through set_session(); here it displays mock data.
     manager = TimelineDockManager(window)
+    panel = manager.get_panel()
+    if panel is not None:
+        panel._init_mock_data()
     manager.show_timeline()
-
-    # Install permission handlers with DEBUG mode
-    # Set DEBUG_ANYTHING_GOES = True to auto-approve all operations
-    from lib_timeline.config import install_debug_handlers, TimelineConfig
-    TimelineConfig.DEBUG_ANYTHING_GOES = True  # Enable debug mode
-    install_debug_handlers(manager.get_panel(), window)
 
     window.show()
     sys.exit(app.exec())

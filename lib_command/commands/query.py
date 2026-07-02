@@ -39,6 +39,7 @@ from lib_openm.dto.workspace import (
     WorkspaceSnapshotDTO,
 )
 from lib_openm.model import view_layout_from_legacy
+from lib_command.dto.timeline import TimelineSnapshotDTO
 from .udf_commands import query_udf_list, query_udf_detail
 from .grid_helpers import (
     make_viewport_cell_key,
@@ -443,6 +444,11 @@ def cmd_query(
                 return {"type": "active_view_current", "view_id": view_id}
         return {"type": "active_view_current", "view_id": None}
 
+    # ---- Timeline query handlers ----
+
+    if type == "timeline_snapshots":
+        return cmd_timeline_snapshots(ctx)
+
     # ---- Legacy query handlers (deprecated) ----
 
     if type == "current_view":
@@ -512,7 +518,7 @@ def cmd_query(
     raise ValueError(
         f"Unknown query type: {type}. "
         "Valid types: current_view, view_list, current_cube, cube_list, "
-        "dimension_list, workspace_summary, workspace_snapshot, "
+        "dimension_list, timeline_snapshots, workspace_summary, workspace_snapshot, "
         "view_detail, view_state, cube_detail, cube_detach_impact, "
         "dimension_item_deletion_impact, dimension_deletion_impact, "
         "dimension_detail, cell_detail, cell_range, cell_viewport_range, "
@@ -524,6 +530,46 @@ def cmd_query(
         "grid_viewport_snapshot, cell_channel_values, selection_stats, workspace_rules, "
         "udf_list, udf_detail"
     )
+
+
+# =============================================================================
+# Timeline query handler implementation
+# =============================================================================
+
+
+def cmd_timeline_snapshots(ctx) -> list[TimelineSnapshotDTO]:
+    """Return timeline snapshots for the current workspace.
+
+    The result is a list of plain DTOs ordered oldest-first by `created_at`,
+    then `snapshot_id` as a tie-breaker. If no timeline service is available
+    (e.g. headless tests), an empty list is returned. In a GUI/runtime context
+    this should be treated as a configuration error and logged.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    timeline = getattr(ctx.services, "timeline", None)
+    if timeline is None:
+        logger.warning("Timeline service unavailable; returning empty snapshot list")
+        return []
+
+    snapshots = timeline.load_snapshots()
+    dtos: list[TimelineSnapshotDTO] = []
+    for snap in snapshots:
+        dto: TimelineSnapshotDTO = {
+            "snapshot_id": str(snap.snapshot_id),
+            "parent_id": str(snap.parent_id) if snap.parent_id is not None else None,
+            "description": snap.description,
+            "branch_name": str(snap.branch_id) if snap.branch_id is not None else None,
+            "created_at": snap.created_at.isoformat(),
+            "snapshot_type": str(snap.snapshot_type.value),
+            "is_delta": bool(snap.is_delta),
+        }
+        dtos.append(dto)
+
+    dtos.sort(key=lambda d: (d["created_at"], d["snapshot_id"]))
+    return dtos
 
 
 # =============================================================================
