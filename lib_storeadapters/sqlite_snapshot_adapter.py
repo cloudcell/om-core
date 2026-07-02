@@ -6,13 +6,12 @@ SnapshotStoreAdapter port instead of datastore internals.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, IO
+from typing import Any
 
 from lib_datastore.datastore import SQLiteDataStore
 from lib_datastore.models import Session as DataStoreSession
@@ -31,6 +30,7 @@ from lib_storeadapters.ports import (
     WorkspaceId,
     WorkspaceLike,
 )
+from lib_storeadapters.cross_process_lock import CrossProcessLock
 from lib_storeadapters.serialization import workspace_content_hash
 
 logger = logging.getLogger(__name__)
@@ -46,9 +46,9 @@ class SQLiteSnapshotStoreAdapter(SnapshotStoreAdapter):
         self._store_dir.mkdir(parents=True, exist_ok=True)
         # Cache of opened SessionStore per workspace to avoid repeated opens.
         self._session_stores: dict[WorkspaceId, SessionStore] = {}
-        # Cache of opened lock file descriptors per workspace for cross-process
-        # serialization of snapshot creation.
-        self._lock_fds: dict[WorkspaceId, IO[str]] = {}
+        # Cache of cross-process locks per workspace for serialization of
+        # snapshot creation across processes and platforms.
+        self._create_locks: dict[WorkspaceId, CrossProcessLock] = {}
 
     def _db_path(self, workspace_id: WorkspaceId) -> Path:
         return self._store_dir / f"ws_{workspace_id}.timeline.sqlite"
@@ -75,6 +75,14 @@ class SQLiteSnapshotStoreAdapter(SnapshotStoreAdapter):
     def _lock_path(self, workspace_id: WorkspaceId) -> Path:
         return self._store_dir / f"ws_{workspace_id}.timeline.lock"
 
+    def _create_lock(self, workspace_id: WorkspaceId) -> CrossProcessLock:
+        """Return a cached CrossProcessLock for the workspace."""
+        lock = self._create_locks.get(workspace_id)
+        if lock is None:
+            lock = CrossProcessLock(self._lock_path(workspace_id))
+            self._create_locks[workspace_id] = lock
+        return lock
+
     def _acquire_create_lock(self, workspace_id: WorkspaceId) -> None:
         """Acquire an exclusive cross-process lock for snapshot creation.
 
@@ -82,19 +90,11 @@ class SQLiteSnapshotStoreAdapter(SnapshotStoreAdapter):
         so that two windows/processes creating a snapshot at the same time see a
         consistent main-branch head and form a linear chain instead of siblings.
         """
-        fd = self._lock_fds.get(workspace_id)
-        if fd is None:
-            lock_path = self._lock_path(workspace_id)
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            fd = open(lock_path, "w")
-            self._lock_fds[workspace_id] = fd
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        self._create_lock(workspace_id).acquire()
 
     def _release_create_lock(self, workspace_id: WorkspaceId) -> None:
         """Release the exclusive cross-process lock for snapshot creation."""
-        fd = self._lock_fds.get(workspace_id)
-        if fd is not None:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+        self._create_lock(workspace_id).release()
 
     @staticmethod
     def _to_port_type(ds_type: DataStoreSnapshotType) -> SnapshotType:
