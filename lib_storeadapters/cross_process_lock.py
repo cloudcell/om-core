@@ -5,6 +5,7 @@ Uses fcntl on Unix-like systems and Windows LockFileEx via ctypes on Windows.
 
 from __future__ import annotations
 
+import ctypes
 import sys
 import threading
 from pathlib import Path
@@ -60,14 +61,30 @@ class CrossProcessLock:
         self.release()
 
 
+class _OVERLAPPED(ctypes.Structure):
+    """Minimal OVERLAPPED layout for LockFileEx / UnlockFileEx.
+
+    ctypes.wintypes does not expose this on every Windows build, so we define it
+    explicitly. The size and hEvent offset match the Windows SDK struct.
+    """
+
+    _fields_ = [
+        ("Internal", ctypes.c_size_t),
+        ("InternalHigh", ctypes.c_size_t),
+        ("Offset", ctypes.c_ulong),
+        ("OffsetHigh", ctypes.c_ulong),
+        ("hEvent", ctypes.c_void_p),
+    ]
+
+
 def _lock_windows(fd: int) -> None:
     """Acquire an exclusive Windows file lock on the whole file."""
-    import ctypes
-    import ctypes.wintypes
     import msvcrt
 
     handle = msvcrt.get_osfhandle(fd)
-    overlapped = ctypes.wintypes.OVERLAPPED()
+    overlapped = _OVERLAPPED()
+    overlapped.Offset = 0
+    overlapped.OffsetHigh = 0
     overlapped.hEvent = 0
     if not ctypes.windll.kernel32.LockFileEx(
         handle,
@@ -82,12 +99,12 @@ def _lock_windows(fd: int) -> None:
 
 def _unlock_windows(fd: int) -> None:
     """Release the Windows file lock on the whole file."""
-    import ctypes
-    import ctypes.wintypes
     import msvcrt
 
     handle = msvcrt.get_osfhandle(fd)
-    overlapped = ctypes.wintypes.OVERLAPPED()
+    overlapped = _OVERLAPPED()
+    overlapped.Offset = 0
+    overlapped.OffsetHigh = 0
     overlapped.hEvent = 0
     if not ctypes.windll.kernel32.UnlockFileEx(
         handle,
