@@ -3643,6 +3643,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         # regardless of stack position (first/middle/last).
         dim_name_maps: list[dict[str, str]] = []
         dim_group_label_maps: list[dict[str, list[str]]] = []
+        dim_aggregate_sets: list[set[str]] = []
 
         def _group_labels_by_item(nodes: list[Any]) -> dict[str, list[str]]:
             out: dict[str, list[str]] = {}
@@ -3673,11 +3674,37 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             _walk(nodes, [])
             return out
 
+        def _aggregate_items(nodes: list[Any]) -> set[str]:
+            out: set[str] = set()
+
+            def _node_item_id(n):
+                return n.get("item_id") if isinstance(n, dict) else getattr(n, "item_id", None)
+
+            def _node_children(n):
+                return n.get("children") if isinstance(n, dict) else getattr(n, "children", None)
+
+            def _node_is_aggregate(n):
+                return n.get("is_aggregate") if isinstance(n, dict) else getattr(n, "is_aggregate", False)
+
+            def _walk(ns: list[Any]) -> None:
+                for n in ns:
+                    item_id = _node_item_id(n)
+                    children = _node_children(n)
+                    is_group = item_id is None and isinstance(children, list) and bool(children)
+                    if is_group:
+                        _walk(children)
+                    elif isinstance(item_id, str) and _node_is_aggregate(n):
+                        out.add(item_id)
+
+            _walk(nodes)
+            return out
+
         for did in row_dim_ids:
             dim = self._workspace_read_model.get_dimension(did)
             dim_name_maps.append({it["id"]: it["name"] for it in dim.get("items", [])} if dim else {})
             outline_nodes = list(dim.get("outline", []) if dim else [])
             dim_group_label_maps.append(_group_labels_by_item(outline_nodes) if outline_nodes else {})
+            dim_aggregate_sets.append(_aggregate_items(outline_nodes) if outline_nodes else set())
 
         # Pre-compute max group depth per dimension
         dim_max_depths: list[int] = []
@@ -3690,8 +3717,11 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         for r_i, key in enumerate(raw_row_keys):
             labels: list[str] = []
             label_paths: list[tuple[int, ...] | None] = []
+            is_aggregate = False
 
-            for dim_idx, (iid, name_map, group_map) in enumerate(zip(key, dim_name_maps, dim_group_label_maps)):
+            for dim_idx, (iid, name_map, group_map, agg_set) in enumerate(zip(key, dim_name_maps, dim_group_label_maps, dim_aggregate_sets)):
+                if isinstance(iid, str) and iid in agg_set:
+                    is_aggregate = True
                 group_labels = list(group_map.get(iid, [])) if isinstance(iid, str) else []
                 max_depth = dim_max_depths[dim_idx]
                 
@@ -3718,6 +3748,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     "labels": labels,
                     "label_paths": label_paths,
                     "path": (r_i,),
+                    "is_aggregate": is_aggregate,
                 }
             )
 
@@ -3856,6 +3887,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         if len(col_dim_ids) > 1:
             dim_name_maps: list[dict[str, str]] = []
             dim_group_label_maps: list[dict[str, list[str]]] = []
+            dim_aggregate_sets: list[set[str]] = []
 
             def _group_labels_by_item(nodes: list[Any]) -> dict[str, list[str]]:
                 out: dict[str, list[str]] = {}
@@ -3886,11 +3918,37 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 _walk(nodes, [])
                 return out
 
+            def _aggregate_items(nodes: list[Any]) -> set[str]:
+                out: set[str] = set()
+
+                def _node_item_id(n):
+                    return n.get("item_id") if isinstance(n, dict) else getattr(n, "item_id", None)
+
+                def _node_children(n):
+                    return n.get("children") if isinstance(n, dict) else getattr(n, "children", None)
+
+                def _node_is_aggregate(n):
+                    return n.get("is_aggregate") if isinstance(n, dict) else getattr(n, "is_aggregate", False)
+
+                def _walk(ns: list[Any]) -> None:
+                    for n in ns:
+                        item_id = _node_item_id(n)
+                        children = _node_children(n)
+                        is_group = item_id is None and isinstance(children, list) and bool(children)
+                        if is_group:
+                            _walk(children)
+                        elif isinstance(item_id, str) and _node_is_aggregate(n):
+                            out.add(item_id)
+
+                _walk(nodes)
+                return out
+
             for did in col_dim_ids:
                 dim = self._workspace_read_model.get_dimension(did)
                 dim_name_maps.append({it["id"]: it["name"] for it in dim.get("items", [])} if dim else {})
                 outline_nodes = list(dim.get("outline", []) if dim else [])
                 dim_group_label_maps.append(_group_labels_by_item(outline_nodes) if outline_nodes else {})
+                dim_aggregate_sets.append(_aggregate_items(outline_nodes) if outline_nodes else set())
 
             # Pre-compute max group depth per dimension
             dim_max_depths: list[int] = []
@@ -3903,8 +3961,11 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             for c_i, k in enumerate(raw_col_keys):
                 labels: list[str] = []
                 label_paths: list[tuple[int, ...] | None] = []
+                is_aggregate = False
                 
-                for dim_idx, (iid, name_map, group_map) in enumerate(zip(k, dim_name_maps, dim_group_label_maps)):
+                for dim_idx, (iid, name_map, group_map, agg_set) in enumerate(zip(k, dim_name_maps, dim_group_label_maps, dim_aggregate_sets)):
+                    if isinstance(iid, str) and iid in agg_set:
+                        is_aggregate = True
                     group_labels = list(group_map.get(iid, [])) if isinstance(iid, str) else []
                     max_depth = dim_max_depths[dim_idx]
                     
@@ -3931,6 +3992,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         "labels": labels,
                         "label_paths": label_paths,
                         "path": (c_i,),
+                        "is_aggregate": is_aggregate,
                     }
                 )
 

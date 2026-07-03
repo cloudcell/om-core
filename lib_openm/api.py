@@ -5009,6 +5009,32 @@ class Engine:
             _walk(nodes)
         return out
 
+    def _sort_keys_by_axis_order(
+        self, keys: list[tuple[str, ...]], dim_ids: list[str]
+    ) -> list[tuple[str, ...]]:
+        """Sort Cartesian keys by each dimension's outline leaf order.
+
+        The outermost dimension (first in dim_ids) is the primary sort key.
+        Dimensions without an outline fall back to their item order.
+        """
+        positions: list[dict[str, int]] = []
+        for dim_id in dim_ids:
+            dim = self.require_dimension_by_id(dim_id)
+            outline = list(self._ws.get_outline(dim.id) or [])
+            if outline:
+                order = self._outline_leaf_order(outline)
+                if order:
+                    positions.append({iid: i for i, iid in enumerate(order)})
+                    continue
+            positions.append({it.id: i for i, it in enumerate(dim.items)})
+
+        def _sort_key(key: tuple[str, ...]) -> tuple[int, ...]:
+            return tuple(
+                positions[i].get(key[i], len(positions[i])) for i in range(len(dim_ids))
+            )
+
+        return sorted(keys, key=_sort_key)
+
     def _outline_label_paths(self, nodes: list[Any]) -> dict[str, list[str]]:
         out: dict[str, list[str]] = {}
 
@@ -5030,10 +5056,9 @@ class Engine:
     def view_row_keys(self, view_id: str) -> list[tuple[str, ...]]:
         view = self.require_view_by_id(view_id)
         keys = self._cartesian_item_ids(list(view.row_dim_ids))
-        # If the y-axis is a single dimension and that dimension has an outline,
-        # order rows according to the outline leaf order.
-        if len(view.row_dim_ids) == 1:
-            dim = self.require_dimension_by_id(view.row_dim_ids[0])
+        dim_ids = list(view.row_dim_ids)
+        if len(dim_ids) == 1:
+            dim = self.require_dimension_by_id(dim_ids[0])
             # Use get_outline() so stale cache is rebuilt; dim.outline may lag behind _outline_cache
             outline = list(self._ws.get_outline(dim.id) or []) or list(getattr(view, "row_outline", None) or [])
             if outline:
@@ -5042,13 +5067,18 @@ class Engine:
                     pos = {iid: i for i, iid in enumerate(order)}
                     if all(len(k) == 1 for k in keys):
                         keys = sorted(keys, key=lambda k: pos.get(k[0], 10**9))
+            return keys
+
+        if len(dim_ids) > 1:
+            keys = self._sort_keys_by_axis_order(keys, dim_ids)
         return keys
 
     def view_col_keys(self, view_id: str) -> list[tuple[str, ...]]:
         view = self.require_view_by_id(view_id)
         keys = self._cartesian_item_ids(list(view.col_dim_ids))
-        if len(view.col_dim_ids) == 1:
-            dim = self.require_dimension_by_id(view.col_dim_ids[0])
+        dim_ids = list(view.col_dim_ids)
+        if len(dim_ids) == 1:
+            dim = self.require_dimension_by_id(dim_ids[0])
             # Use get_outline() so stale cache is rebuilt; dim.outline may lag behind _outline_cache
             outline = list(self._ws.get_outline(dim.id) or []) or list(getattr(view, "col_outline", None) or [])
             if outline:
@@ -5057,6 +5087,10 @@ class Engine:
                     pos = {iid: i for i, iid in enumerate(order)}
                     if all(len(k) == 1 for k in keys):
                         keys = sorted(keys, key=lambda k: pos.get(k[0], 10**9))
+            return keys
+
+        if len(dim_ids) > 1:
+            keys = self._sort_keys_by_axis_order(keys, dim_ids)
         return keys
 
     def view_col_header(self, view_id: str, col_index: int) -> str:
