@@ -41,7 +41,6 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.margins import ScrollbarMargin
-from prompt_toolkit.layout.processors import BeforeInput
 from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
 from . import config as cfg
@@ -132,6 +131,8 @@ class PromptToolkitTUI:
     def __init__(self, repl: "OpenMREPL") -> None:
         self.repl = repl
         self._running = True
+        self._busy = False
+        self._loop = None
 
         # -- output pane --------------------------------------------------
         self.output_buffer = Buffer()
@@ -177,14 +178,20 @@ class PromptToolkitTUI:
         )
         repl._prompt_history = history
 
+        def _prompt_prefix(line: int, wrap_count: int):
+            # Only the first line (the input line) gets the prompt prefix.
+            if line == 0:
+                return [("class:om-prompt", "om> ")]
+            return []
+
         self.input_window = Window(
             content=BufferControl(
                 buffer=self.cmd_buffer,
-                input_processors=[BeforeInput("om> ", style="class:om-prompt")],
             ),
             height=1,
             wrap_lines=False,
             dont_extend_height=True,
+            get_line_prefix=_prompt_prefix,
         )
 
         # -- key bindings -------------------------------------------------
@@ -534,6 +541,10 @@ class PromptToolkitTUI:
         if not line:
             return False  # accepted but empty — no history entry
 
+        if self._busy:
+            self._append_text("om> busy")
+            return False
+
         # Manually append to history, then clear buffer ourselves.
         # (prompt_toolkit's auto-history only works when it clears the buffer;
         #  we clear it ourselves so the prompt is ready for the next command.)
@@ -557,30 +568,53 @@ class PromptToolkitTUI:
             self.app.exit()
             return False
 
-        # Capture stdout while the command runs
-        proxy = _StdoutProxy(self._append_text)
-        old_stdout = sys.stdout
-        old_repl_stdout = self.repl.stdout
-        sys.stdout = proxy
-        self.repl.stdout = proxy
+        self._busy = True
+
+        def _run_command():
+            # Capture stdout while the command runs; background threads schedule
+            # output into the prompt_toolkit output pane via _append_text.
+            proxy = _StdoutProxy(self._append_text)
+            old_stdout = sys.stdout
+            old_repl_stdout = self.repl.stdout
+            sys.stdout = proxy
+            self.repl.stdout = proxy
+
+            try:
+                processed = self.repl.precmd(line)
+                stop = self.repl.onecmd(processed)
+                proxy.flush()
+                stop = self.repl.postcmd(stop, processed)
+                if stop:
+                    self._running = False
+                    try:
+                        loop = self._loop or asyncio.get_running_loop()
+                        loop.call_soon_threadsafe(self.app.exit)
+                    except Exception:
+                        pass
+            except SystemExit:
+                self._running = False
+                try:
+                    loop = self._loop or asyncio.get_running_loop()
+                    loop.call_soon_threadsafe(self.app.exit)
+                except Exception:
+                    pass
+            except Exception as exc:
+                proxy.flush()
+                self._append_text(f"Error: {exc}")
+            finally:
+                sys.stdout = old_stdout
+                self.repl.stdout = old_repl_stdout
+                self._busy = False
 
         try:
-            processed = self.repl.precmd(line)
-            stop = self.repl.onecmd(processed)
-            proxy.flush()
-            stop = self.repl.postcmd(stop, processed)
-            if stop:
-                self._running = False
-                self.app.exit()
-        except SystemExit:
-            self._running = False
-            self.app.exit()
-        except Exception as exc:
-            proxy.flush()
-            self._append_text(f"Error: {exc}")
-        finally:
-            sys.stdout = old_stdout
-            self.repl.stdout = old_repl_stdout
+            loop = self._loop or asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.run_in_executor(None, _run_command)
+        else:
+            self._busy = False
+            self._append_text("Error: no event loop available")
 
         return False
 
@@ -680,13 +714,28 @@ class PromptToolkitTUI:
                 self.output_buffer.text = "\n".join(keep) + "\n"
             self.output_buffer.cursor_position = len(self.output_buffer.text)
 
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.call_soon_threadsafe(_insert)
+        loop = self._loop
+        if loop is None:
+            # get_running_loop does not warn; if there is no running loop, fall
+            # back to a direct update (safe during construction or tests).
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+        if loop is not None and loop.is_running():
+            # If we're already on the event loop thread, update immediately
+            # so output streams while commands run. Background threads still
+            # use the thread-safe schedule path.
+            if loop._thread_id == threading.current_thread().ident:
+                _insert()
+                try:
+                    self.app.invalidate()
+                except Exception:
+                    pass
                 return
-        except Exception:
-            pass
+            loop.call_soon_threadsafe(_insert)
+            return
         _insert()
 
     # ------------------------------------------------------------------
@@ -732,6 +781,16 @@ class PromptToolkitTUI:
     # ------------------------------------------------------------------
 
     def run(self) -> None:
+        # Store the event loop for thread-safe scheduling later.
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+            except Exception:
+                self._loop = None
+
         # SIGHUP is Unix-only; skip it on Windows.
         signals = [signal.SIGTERM]
         if hasattr(signal, "SIGHUP"):

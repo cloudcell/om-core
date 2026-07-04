@@ -887,11 +887,11 @@ class REPLModelMixin:
         Resolve a cube reference (name or ID) to (cube_id, cube_name) tuple.
 
         Routes through QueryService instead of direct engine/workspace reads.
-        Returns (cube_id, cube_name) if found, (None, None) if not found.
+        Returns (cube_id, cube_name) if found, (None, cube_ref) if not found.
         """
         data = self.session.query("cube_list")
         if not data:
-            return None, None
+            return None, cube_ref
 
         cubes = data.get("cubes", [])
 
@@ -905,7 +905,7 @@ class REPLModelMixin:
             if c.get("name") == cube_ref:
                 return c.get("id"), cube_ref
 
-        return None, None
+        return None, cube_ref
 
     def _resolve_view_id(self: OpenMREPLCore, view_ref: str) -> tuple:
         """

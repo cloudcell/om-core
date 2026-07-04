@@ -173,9 +173,9 @@ class MessageBus:
         # Collect matching subscribers, deduplicated by callback identity (id)
         seen: set[int] = set()
         callbacks: list[Callable[[Any], None]] = []
-        for pattern, subs in self._subscribers.items():
+        for pattern, subs in list(self._subscribers.items()):
             if _topic_matches(pattern, topic):
-                for callback in subs:
+                for callback in list(subs):
                     key = id(callback)
                     if key in seen:
                         continue
