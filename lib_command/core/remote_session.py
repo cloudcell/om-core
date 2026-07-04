@@ -39,6 +39,10 @@ class RemoteCommandSession:
 
     @property
     def is_connected(self) -> bool:
+        # Prefer the transport client's actual socket state; fall back to the
+        # local flag for transports that don't expose it.
+        if hasattr(self.transport_client, "is_connected"):
+            return self.transport_client.is_connected
         return self._connected
 
     def execute(self, command_id: str, **params) -> ExecutionResult:
@@ -62,7 +66,7 @@ class RemoteCommandSession:
                 data={"name": name, "value": value, "global": global_scope},
             )
 
-        if not self._connected:
+        if not self.is_connected:
             return ExecutionResult(
                 status=ExecutionStatus.ERROR,
                 command_id=command_id,
@@ -70,6 +74,18 @@ class RemoteCommandSession:
             )
         try:
             return self.transport_client.send(self.session_id, command_id, **params)
+        except TimeoutError as exc:
+            # A reply timeout is a slow/unresponsive server, not a closed socket.
+            # Keep the socket open so further commands can retry.
+            try:
+                logger.warning("Transport timeout during execute: %s", exc)
+            except ValueError:
+                pass  # stdout/stderr may be closed during test teardown
+            return ExecutionResult(
+                status=ExecutionStatus.ERROR,
+                command_id=command_id,
+                error=f"Transport reply timeout: {exc}",
+            )
         except (ConnectionError, OSError) as exc:
             self._connected = False
             try:
@@ -84,10 +100,17 @@ class RemoteCommandSession:
 
     def query(self, query_id: str, **params) -> Any:
         """Execute a query through the transport and return data."""
-        if not self._connected:
+        if not self.is_connected:
             return None
         try:
             return self.transport_client.query(self.session_id, query_id, **params)
+        except TimeoutError as exc:
+            # A reply timeout is a slow/unresponsive server, not a closed socket.
+            try:
+                logger.warning("Transport timeout during query: %s", exc)
+            except ValueError:
+                pass  # stdout/stderr may be closed during test teardown
+            return None
         except (ConnectionError, OSError) as exc:
             self._connected = False
             try:

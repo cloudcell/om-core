@@ -405,6 +405,11 @@ class OpenMREPLCore(cmd.Cmd):
                 if self._repl_state is None:
                     continue
                 try:
+                    if hasattr(self.session, "is_connected"):
+                        self._repl_state.connected = bool(self.session.is_connected)
+                except Exception:
+                    pass
+                try:
                     result = self.session.query("diagnostics_dirty_count")
                     if isinstance(result, dict) and "dirty_count" in result:
                         self._repl_state.dirty_count = result["dirty_count"]

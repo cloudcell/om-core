@@ -49,7 +49,9 @@ class GUIEventAdapter:
         if topic.endswith(".succeeded"):
             self._emit_ui_refresh(command_id)
         elif topic.endswith(".failed"):
-            error = event.payload.get("error", "Unknown error")
+            error = event.payload.get("error")
+            if not error:
+                error = f"command {command_id} failed"
             self._emit_ui_status(error)
 
     @staticmethod

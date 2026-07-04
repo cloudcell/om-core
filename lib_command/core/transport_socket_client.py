@@ -146,6 +146,11 @@ class SocketTransportClient:
             if not self._subscriptions[topic]:
                 del self._subscriptions[topic]
 
+    @property
+    def is_connected(self) -> bool:
+        """Return True if the underlying socket is still open."""
+        return self._sock is not None
+
     def ping(self, session_id: str | None = None) -> bool:
         """Send a transport ping and return whether the server replied."""
         request = MessageEnvelope(

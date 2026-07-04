@@ -81,6 +81,9 @@ class REPLModelMixin:
             return
         
         cube_id, resolved_name = self._resolve_cube_id(cube_name)
+        if cube_id is None and resolved_name is None:
+            print("Error: Could not list cubes (timeout or disconnect)")
+            return
         if not cube_id:
             data = self.session.query("cube_list")
             available = [c.get("name", "") for c in data.get("cubes", [])] if data else []
@@ -88,7 +91,7 @@ class REPLModelMixin:
             if available:
                 print(f"Available cubes: {', '.join(available)}")
             return
-        
+
         # Set session context directly (session state, not engine state)
         ctx = getattr(self.session, "context", None)
         if ctx is None and hasattr(self.session, "require_context"):
@@ -160,6 +163,9 @@ class REPLModelMixin:
                 return
             cube_name = rest[0]
             cube_id, resolved_name = self._resolve_cube_id(cube_name)
+            if cube_id is None and resolved_name is None:
+                print("Error: Could not list cubes (timeout or disconnect)")
+                return
             if not cube_id:
                 print(f"Error: Cube '{cube_name}' not found")
                 return
@@ -177,11 +183,17 @@ class REPLModelMixin:
                 print(f"Usage: cube {sub} <cube_name> <dim_name>")
                 return
             cube_name, dim_name = rest[0], rest[1]
-            cube_id, _ = self._resolve_cube_id(cube_name)
+            cube_id, resolved_name = self._resolve_cube_id(cube_name)
+            if cube_id is None and resolved_name is None:
+                print("Error: Could not list cubes (timeout or disconnect)")
+                return
             if not cube_id:
                 print(f"Error: Cube '{cube_name}' not found")
                 return
-            dim_id, _ = self._resolve_dimension_id(dim_name)
+            dim_id, resolved_dim_name = self._resolve_dimension_id(dim_name)
+            if dim_id is None and resolved_dim_name is None:
+                print("Error: Could not list dimensions (timeout or disconnect)")
+                return
             if not dim_id:
                 print(f"Error: Dimension '{dim_name}' not found")
                 return
@@ -220,6 +232,9 @@ class REPLModelMixin:
             return
         cube_name = arg.strip()
         cube_id, resolved_name = self._resolve_cube_id(cube_name)
+        if cube_id is None and resolved_name is None:
+            print("Error: Could not list cubes (timeout or disconnect)")
+            return
         if not cube_id:
             print(f"Error: Cube '{cube_name}' not found")
             return
@@ -345,7 +360,10 @@ class REPLModelMixin:
                 print("Usage: dimension rename <old_name> <new_name>")
                 return
             old_name, new_name = rest[0], rest[1]
-            dim_id, _ = self._resolve_dimension_id(old_name)
+            dim_id, resolved_dim_name = self._resolve_dimension_id(old_name)
+            if dim_id is None and resolved_dim_name is None:
+                print("Error: Could not list dimensions (timeout or disconnect)")
+                return
             if not dim_id:
                 print(f"Error: Dimension '{old_name}' not found")
                 return
@@ -363,7 +381,10 @@ class REPLModelMixin:
                 print("Usage: dimension delete <name>")
                 return
             dim_name = rest[0]
-            dim_id, _ = self._resolve_dimension_id(dim_name)
+            dim_id, resolved_dim_name = self._resolve_dimension_id(dim_name)
+            if dim_id is None and resolved_dim_name is None:
+                print("Error: Could not list dimensions (timeout or disconnect)")
+                return
             if not dim_id:
                 print(f"Error: Dimension '{dim_name}' not found")
                 return
@@ -446,7 +467,10 @@ class REPLModelMixin:
                     print("Usage: view rename <old_name> <new_name>")
                     return
                 old_name, new_name = rest[0], rest[1]
-                view_id, _ = self._resolve_view_id(old_name)
+                view_id, resolved_view_name = self._resolve_view_id(old_name)
+                if view_id is None and resolved_view_name is None:
+                    print("Error: Could not list views (timeout or disconnect)")
+                    return
                 if not view_id:
                     print(f"Error: View '{old_name}' not found")
                     return
@@ -534,7 +558,10 @@ class REPLModelMixin:
                     col_dim_name = None
 
                 cube_data = self.session.query("cube_list")
-                cubes = cube_data.get("cubes", []) if cube_data else []
+                if cube_data is None:
+                    print("Error: Could not list cubes (timeout or disconnect)")
+                    return
+                cubes = cube_data.get("cubes", [])
                 cube_id = None
                 for c in cubes:
                     if c.get("name") == cube_name or c.get("id") == cube_name:
@@ -545,7 +572,10 @@ class REPLModelMixin:
                     return
 
                 dim_data = self.session.query("dimension_list")
-                dims = dim_data.get("dimensions", []) if dim_data else []
+                if dim_data is None:
+                    print("Error: Could not list dimensions (timeout or disconnect)")
+                    return
+                dims = dim_data.get("dimensions", [])
 
                 row_dim_id = _resolve_dim(row_dim_name, dims)
                 if not row_dim_id:
@@ -566,7 +596,10 @@ class REPLModelMixin:
                 cube_name, layout = _parse_role_syntax(spec)
 
                 cube_data = self.session.query("cube_list")
-                cubes = cube_data.get("cubes", []) if cube_data else []
+                if cube_data is None:
+                    print("Error: Could not list cubes (timeout or disconnect)")
+                    return
+                cubes = cube_data.get("cubes", [])
                 cube_id = None
                 for c in cubes:
                     if c.get("name") == cube_name or c.get("id") == cube_name:
@@ -706,7 +739,10 @@ class REPLModelMixin:
                 cube_name = parts[0].strip()
                 spec = parts[1].strip() if len(parts) > 1 else ""
 
-                cube_id, cube_name = self._resolve_cube_id(cube_name)
+                cube_id, resolved_name = self._resolve_cube_id(cube_name)
+                if cube_id is None and resolved_name is None:
+                    print("Error: Could not list cubes (timeout or disconnect)")
+                    return
                 if not cube_id:
                     print(f"Error: Cube not found: {cube_name}")
                     return
@@ -887,11 +923,13 @@ class REPLModelMixin:
         Resolve a cube reference (name or ID) to (cube_id, cube_name) tuple.
 
         Routes through QueryService instead of direct engine/workspace reads.
-        Returns (cube_id, cube_name) if found, (None, cube_ref) if not found.
+        Returns (cube_id, cube_name) if found.
+        Returns (None, cube_ref) if the cube is genuinely not found.
+        Returns (None, None) if the query failed (timeout/disconnect).
         """
         data = self.session.query("cube_list")
-        if not data:
-            return None, cube_ref
+        if data is None:
+            return None, None
 
         cubes = data.get("cubes", [])
 
@@ -912,10 +950,12 @@ class REPLModelMixin:
         Resolve a view reference (name or ID) to (view_id, view_name) tuple.
 
         Routes through QueryService instead of direct engine/workspace reads.
-        Returns (view_id, view_name) if found, (None, None) if not found.
+        Returns (view_id, view_name) if found.
+        Returns (None, view_ref) if the view is genuinely not found.
+        Returns (None, None) if the query failed (timeout/disconnect).
         """
         data = self.session.query("view_list")
-        if not data:
+        if data is None:
             return None, None
 
         views = data.get("views", [])
@@ -930,17 +970,19 @@ class REPLModelMixin:
             if v.get("name") == view_ref:
                 return v.get("id"), view_ref
 
-        return None, None
+        return None, view_ref
 
     def _resolve_dimension_id(self: OpenMREPLCore, dim_ref: str) -> tuple:
         """
         Resolve a dimension reference (name or ID) to (dim_id, dim_name) tuple.
 
         Routes through QueryService instead of direct engine/workspace reads.
-        Returns (dim_id, dim_name) if found, (None, None) if not found.
+        Returns (dim_id, dim_name) if found.
+        Returns (None, dim_ref) if the dimension is genuinely not found.
+        Returns (None, None) if the query failed (timeout/disconnect).
         """
         data = self.session.query("dimension_list")
-        if not data:
+        if data is None:
             return None, None
 
         dimensions = data.get("dimensions", [])
@@ -955,7 +997,7 @@ class REPLModelMixin:
             if d.get("name") == dim_ref:
                 return d.get("id"), dim_ref
 
-        return None, None
+        return None, dim_ref
 
     def do_delete_view(self: OpenMREPLCore, arg: str):
         """
@@ -970,6 +1012,9 @@ class REPLModelMixin:
             return
         view_name = arg.strip()
         view_id, resolved_name = self._resolve_view_id(view_name)
+        if view_id is None and resolved_name is None:
+            print("Error: Could not list views (timeout or disconnect)")
+            return
         if not view_id:
             print(f"Error: View '{view_name}' not found")
             return

@@ -41,6 +41,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
 from . import config as cfg
@@ -132,6 +133,7 @@ class PromptToolkitTUI:
         self.repl = repl
         self._running = True
         self._busy = False
+        self._busy_command: str | None = None
         self._loop = None
 
         # -- output pane --------------------------------------------------
@@ -542,7 +544,13 @@ class PromptToolkitTUI:
             return False  # accepted but empty — no history entry
 
         if self._busy:
-            self._append_text("om> busy")
+            if self._busy_command:
+                snippet = self._busy_command[:60]
+                if len(self._busy_command) > 60:
+                    snippet += "..."
+                self._append_text(f"om> busy (waiting for: {snippet})")
+            else:
+                self._append_text("om> busy (previous command still running)")
             return False
 
         # Manually append to history, then clear buffer ourselves.
@@ -569,6 +577,7 @@ class PromptToolkitTUI:
             return False
 
         self._busy = True
+        self._busy_command = line
 
         def _run_command():
             # Capture stdout while the command runs; background threads schedule
@@ -605,6 +614,7 @@ class PromptToolkitTUI:
                 sys.stdout = old_stdout
                 self.repl.stdout = old_repl_stdout
                 self._busy = False
+                self._busy_command = None
 
         try:
             loop = self._loop or asyncio.get_running_loop()
@@ -614,6 +624,7 @@ class PromptToolkitTUI:
             loop.run_in_executor(None, _run_command)
         else:
             self._busy = False
+            self._busy_command = None
             self._append_text("Error: no event loop available")
 
         return False
@@ -744,6 +755,15 @@ class PromptToolkitTUI:
 
     def _status_fragments(self):
         """Return HTML-formatted status for the status line."""
+        # Sync the thread-safe ReplState with the actual session connection state
+        # so the status bar reflects disconnections immediately.
+        try:
+            if hasattr(self.repl, "session") and hasattr(self.repl.session, "is_connected"):
+                connected = bool(self.repl.session.is_connected)
+                if hasattr(self.repl, "_repl_state"):
+                    self.repl._repl_state.connected = connected
+        except Exception:
+            pass
         if hasattr(self.repl, "_repl_state"):
             raw = self.repl._repl_state.render()
             return HTML(raw)
@@ -813,7 +833,8 @@ class PromptToolkitTUI:
                 pass
 
         try:
-            self.app.run()
+            with patch_stdout():
+                self.app.run()
         except KeyboardInterrupt:
             pass
         finally:

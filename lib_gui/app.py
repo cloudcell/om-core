@@ -2705,7 +2705,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot()
     def _execute_ui_refresh(self) -> None:
-        """Perform the coalesced browser rebuild and view refresh."""
+        """Perform the coalesced browser rebuild, view refresh, and rule panel rebuild."""
         needs_browser = self._ui_refresh_needs_browser
         self._ui_refresh_needs_browser = False
         if needs_browser:
@@ -2720,6 +2720,15 @@ class MainWindow(QtWidgets.QMainWindow):
         for win in list(self._workspace_windows):
             try:
                 win.controller.refresh_all_views()
+            except Exception:
+                pass
+        try:
+            self._rule_panel.rebuild()
+        except Exception:
+            pass
+        for win in list(self._workspace_windows):
+            try:
+                win.controller.rebuild_rule_panel()
             except Exception:
                 pass
 
