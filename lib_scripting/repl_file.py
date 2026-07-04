@@ -360,16 +360,55 @@ class REPLFileMixin:
             print(f"Sourcing {filepath} ({len(lines)} lines)...")
             executed = 0
             errors = []
+            rule_batch: list[dict] = []
+
+            def _flush_rule_batch() -> None:
+                if not rule_batch:
+                    return
+                try:
+                    result = self.session.execute("apply_rule_batch", rules=rule_batch)
+                    if result.success:
+                        print(f"Applied {len(rule_batch)} rule(s)")
+                    else:
+                        raise Exception(result.error or "Rule batch failed")
+                except Exception as e:
+                    errors.append((line_num, str(e), f"apply_rule_batch ({len(rule_batch)} rules)"))
+                    raise
+                finally:
+                    rule_batch.clear()
+
             for line_num, line in enumerate(lines, 1):
                 stripped = line.strip()
                 if not stripped or stripped.startswith('#'):
                     continue
 
                 try:
+                    parts = stripped.split()
+                    is_batchable_rule = (
+                        parts
+                        and parts[0].lower() == "rule"
+                        and "=" in stripped
+                        and (len(parts) == 1 or parts[1].lower() not in ("delete", "delete-anchored", "set-anchored"))
+                    )
+                    if is_batchable_rule:
+                        rule_dict = self.do_rule(stripped[5:].strip(), batch_mode=True)
+                        if rule_dict is not None:
+                            rule_batch.append(rule_dict)
+                            executed += 1
+                            continue
+                        # Parse failed; do_rule already reported it. Skip executing it again.
+                        errors.append((line_num, "Invalid rule command", stripped))
+                        continue
+                    _flush_rule_batch()
                     self.onecmd(stripped)
                     executed += 1
                 except Exception as e:
                     errors.append((line_num, str(e), stripped))
+
+            try:
+                _flush_rule_batch()
+            except Exception:
+                pass
 
             if errors:
                 print(f"Executed {executed} commands, {len(errors)} errors:")

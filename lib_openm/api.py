@@ -8450,6 +8450,7 @@ class Engine:
         item_id: str,
         expression: str,
         addr_mask: tuple[str | None, ...] | None = None,
+        max_cells: int | None = None,
     ) -> None:
         # Build effective mask to find existing rule
         if addr_mask is not None and len(addr_mask) == len(cube.dimension_ids):
@@ -8518,6 +8519,7 @@ class Engine:
             prev_strict = getattr(self, "_eval_strict_mode", False)
             self._eval_strict_mode = True
             try:
+                evaluated = 0
                 for raw_addr in itertools.product(*axis_item_ids):
                     addr = tuple(raw_addr)
                     if addr_mask is not None and len(addr) == len(addr_mask):
@@ -8530,6 +8532,9 @@ class Engine:
                         continue
                     if self._ws.find_anchored_rule(cube.id, addr) is not None:
                         continue
+                    evaluated += 1
+                    if max_cells is not None and evaluated > max_cells:
+                        break
                     prev_val = cube.get(addr)
                     cleared_values[addr] = prev_val
                     cube.set(addr, None)
@@ -9108,6 +9113,7 @@ class Engine:
         targets: list[tuple[str, str]],
         expression: str,
         is_anchored: bool = False,
+        max_cells: int | None = None,
     ) -> None:
         """Create or update a (possibly multi-dimension) rule.
 
@@ -9130,7 +9136,9 @@ class Engine:
         if self._is_whole_cube_rule_mask(cube, addr_mask, tuple(targets)):
             self._validate_cross_cube_wildcard_mapping_dims(cube, expression)
 
-        self._validate_rule_entry(cube, primary_dim_id, primary_item_id, expression, addr_mask=addr_mask)
+        self._validate_rule_entry(
+            cube, primary_dim_id, primary_item_id, expression, addr_mask=addr_mask, max_cells=max_cells
+        )
         rule = self._ws.upsert_rule(
             cube.id, primary_dim_id, primary_item_id, expression,
             addr_mask=addr_mask, targets=tuple(targets), is_anchored=is_anchored
@@ -9153,6 +9161,65 @@ class Engine:
             self._on_cell_value_changed(cube.id, full_addr)
             # Compute the rule value immediately so it's available without requiring cell access first
             self._get_cell_by_addr(cube, full_addr)
+
+    def apply_rule_batch(
+        self,
+        rules: list[dict],
+    ) -> tuple[bool, str | None]:
+        """Apply multiple set-rule operations atomically.
+
+        Used by script/macro paths to avoid one transport round-trip per rule.
+        Validation is sampled (max_cells=1) to keep script execution fast.
+        On failure, applied rules are rolled back so the script does not leave
+        a partial state.
+        """
+        parsed_rules: list[tuple[Cube, list[tuple[str, str]], str, bool, tuple[str | None, ...], str, str]] = []
+        for rule in rules:
+            cube_id = rule["cube_id"]
+            targets = rule["targets"]
+            expression = rule["expression"]
+            is_anchored = rule.get("is_anchored", False)
+            cube = self.require_cube_by_id(cube_id)
+            expression = self._normalize_expression(expression)
+            addr_mask, primary_dim_id, primary_item_id = self._resolve_rule_targets(
+                cube, targets, use_defaults_for_unspecified=is_anchored
+            )
+            if self._is_whole_cube_rule_mask(cube, addr_mask, tuple(targets)):
+                self._validate_cross_cube_wildcard_mapping_dims(cube, expression)
+            parsed_rules.append(
+                (cube, targets, expression, is_anchored, addr_mask, primary_dim_id, primary_item_id)
+            )
+
+        applied_rules: list[tuple[Cube, Any]] = []
+        try:
+            for cube, targets, expression, is_anchored, addr_mask, primary_dim_id, primary_item_id in parsed_rules:
+                self._validate_rule_entry(
+                    cube, primary_dim_id, primary_item_id, expression, addr_mask=addr_mask, max_cells=1
+                )
+                rule = self._ws.upsert_rule(
+                    cube.id, primary_dim_id, primary_item_id, expression,
+                    addr_mask=addr_mask, targets=tuple(targets), is_anchored=is_anchored
+                )
+                applied_rules.append((cube, rule))
+                if is_anchored and rule.addr_mask is not None:
+                    full_addr: tuple[str, ...] = tuple(
+                        item_id if item_id is not None else (
+                            self._get_default_item(dim_id).id if self._get_default_item(dim_id) else ""
+                        )
+                        for dim_id, item_id in zip(cube.dimension_ids, rule.addr_mask)
+                    )
+                    cube.user_override_addrs.discard(full_addr)
+                    cube.set(full_addr, None)
+                    self._on_cell_value_changed(cube.id, full_addr)
+                    self._get_cell_by_addr(cube, full_addr)
+        except Exception as e:
+            for cube, rule in applied_rules:
+                self._ws.delete_rule(rule.id)
+            self._cell_cache.clear()
+            return False, str(e)
+
+        self._cell_cache.clear()
+        return True, None
 
     def set_rule_order(self, rule_ids: list[str]) -> None:
         self._ws.set_rule_order(rule_ids)

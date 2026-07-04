@@ -34,6 +34,7 @@ from ..commands.view_state import (
     cmd_set_selection as _cmd_set_selection_v2,
 )
 from ..commands.rule import (
+    cmd_apply_rule_batch,
     cmd_delete_rule,
     cmd_update_rule,
     cmd_set_rule_order,
@@ -968,6 +969,17 @@ def register_default_commands(registry: CommandRegistry | None = None) -> Comman
             shortcut=None,
             description="Set a rule on a cube (legacy alias)",
             params={"cube_id": str, "targets": list, "expression": str, "is_anchored": bool}
+        )
+
+    if not registry.is_registered("apply_rule_batch"):
+        registry.register(
+            "apply_rule_batch",
+            "Apply Rule Batch",
+            CommandCategory.CALCULATION,
+            cmd_apply_rule_batch,
+            description="Apply multiple rules atomically (script/macro path)",
+            params={"rules": list},
+            needs_context=True,
         )
 
     if not registry.is_registered("delete_rule"):

@@ -640,7 +640,7 @@ class REPLModelMixin:
             import traceback
             traceback.print_exc()
 
-    def do_rule(self: OpenMREPLCore, arg: str):
+    def do_rule(self: OpenMREPLCore, arg: str, batch_mode: bool = False):
         """
         Rule sub-command dispatcher.
 
@@ -663,6 +663,9 @@ class REPLModelMixin:
         Bus command: "set_rule"
         Events: command.set_rule.before / command.set_rule.succeeded / command.set_rule.failed
         Sub-commands expand to canonical command IDs and call session.execute().
+
+        When batch_mode is True, set-rule commands are not executed; instead a
+        rule dict is returned so the caller (e.g. do_source) can batch them.
         """
         parts = arg.split() if arg else []
         sub = parts[0].lower() if parts else None
@@ -854,6 +857,14 @@ class REPLModelMixin:
                 else:
                     spec = target
 
+            if batch_mode:
+                return {
+                    "cube_id": cube_id,
+                    "targets": targets,
+                    "expression": expr,
+                    "is_anchored": is_anchored,
+                }
+
             # Execute the rule command via the executor (bus-driven)
             result = self.session.execute(
                 "set_rule", cube_id=cube_id, targets=targets, expression=expr, is_anchored=is_anchored
@@ -868,6 +879,8 @@ class REPLModelMixin:
             print(f"Error setting rule: {e}")
             import traceback
             traceback.print_exc()
+            if batch_mode:
+                return None
 
     def help_rule(self: OpenMREPLCore):
         print("\nrule <target> = <expression>")

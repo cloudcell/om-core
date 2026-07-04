@@ -134,6 +134,21 @@ def cmd_set_rule(
     return cmd_rule(ctx, cube_id, targets, expression, is_anchored)
 
 
+def cmd_apply_rule_batch(ctx, rules: list) -> dict:
+    """Apply a list of rules atomically. Used by script/macro paths.
+
+    Each rule dict must contain: cube_id, targets, expression, is_anchored.
+    """
+    engine = ctx.engine
+    if not engine:
+        raise ValueError("No engine available")
+
+    success, error = engine.apply_rule_batch(rules)
+    if not success:
+        raise ValueError(error or "Rule batch failed")
+    return {"affected": len(rules), "property": "rule_batch", "applied": len(rules)}
+
+
 def cmd_list_rules(ctx, cube_id: str) -> dict:
     """List all rules for a cube.
 
