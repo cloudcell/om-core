@@ -105,7 +105,17 @@ else
         echo "Opening TUI in a separate terminal..."
         TUI_CMD="cd \"$SCRIPT_DIR\" && ./start.sh --tui"
 
-        if command -v gnome-terminal >/dev/null 2>&1; then
+        if command -v osascript >/dev/null 2>&1 && [ "$(uname -s)" = "Darwin" ]; then
+            # macOS: open a new Terminal.app window and run the TUI client there.
+            # Escape backslashes and double quotes so the path is safe in AppleScript.
+            SCRIPT_DIR_AE=$(printf '%s\n' "$SCRIPT_DIR" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\n')
+            osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "cd " & quoted form of "$SCRIPT_DIR_AE" & " && ./start.sh --tui"
+end tell
+EOF
+        elif command -v gnome-terminal >/dev/null 2>&1; then
             gnome-terminal -- bash -c "$TUI_CMD" &
         elif command -v konsole >/dev/null 2>&1; then
             konsole -e bash -c "$TUI_CMD" &
