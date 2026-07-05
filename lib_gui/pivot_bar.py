@@ -38,7 +38,7 @@ PageChip {
     background: #e4e8ef;
     border: 1px solid #b8c2d0;
     border-radius: 3px;
-    padding: 1px 7px 1px 2px;
+    padding: 1px 14px 1px 2px;
     font-size: 11px;
     font-weight: 600;
     color: #1e2d40;
@@ -47,6 +47,12 @@ PageChip {
 }
 PageChip:hover  { background: #d0d8e8; border-color: #7890b8; }
 PageChip:pressed { background: #b8c8dc; border-color: #4870a8; }
+
+PageChip::menu-indicator {
+    image: none;
+    width: 0px;
+    height: 0px;
+}
 """
 
 _PLUS_QSS = """
@@ -220,6 +226,30 @@ class PageChip(_DraggableChipMixin, QtWidgets.QToolButton):
         self.setToolTip("Drag to bottom to make this a row/column axis")
         self._rebuild_menu()
         self._update_label()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        """Draw the chip normally, then add a solid downward triangle on the right.
+
+        The native macOS QToolButton menu indicator is a thin chevron; we override
+        it (hidden via QSS) with a filled triangle.
+        """
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QtGui.QColor("#1e2d40"))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        arrow_w = 8.0
+        arrow_h = 5.0
+        margin = 6.0
+        x = self.width() - margin - arrow_w
+        y = (self.height() - arrow_h) / 2.0
+        triangle = QtGui.QPolygonF([
+            QtCore.QPointF(x, y),
+            QtCore.QPointF(x + arrow_w, y),
+            QtCore.QPointF(x + arrow_w / 2.0, y + arrow_h),
+        ])
+        painter.drawPolygon(triangle)
+        painter.end()
 
     @property
     def dim_id(self) -> str:
