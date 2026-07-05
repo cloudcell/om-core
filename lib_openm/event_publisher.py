@@ -1,23 +1,12 @@
-"""Abstract event publisher interface for lib_openm.
+"""Compatibility re-export for EventPublisher.
 
-The Engine delegates event publication to an injected EventPublisher.
-Implementations are provided by the command/bus layer (lib_command).
+The canonical port definition now lives in lib_openm.ports. Existing imports
+from lib_openm.event_publisher continue to work but new code should import
+from lib_openm.ports.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from typing import Any
+from lib_openm.ports import EventPublisher
 
-
-class EventPublisher(ABC):
-    """Abstract interface for publishing engine events.
-
-    Implementations are provided by the command/bus layer (lib_command).
-    The Engine never imports lib_command directly.
-    """
-
-    @abstractmethod
-    def publish(self, topic_suffix: str, payload: dict, engine: Any) -> None:
-        """Publish an event. Must never raise — caller must not be affected."""
-        ...
+__all__ = ["EventPublisher"]

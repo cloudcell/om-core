@@ -238,7 +238,7 @@ class AddDimensionItemCommand:
         self.description = f"Add item '{self.item_name}'"
 
     def do(self) -> None:
-        item = self.engine.add_dimension_item(self.dim_id, self.item_name)
+        item = self.engine.create_dimension_item(self.dim_id, self.item_name)
         self.item_id = item.id
 
     def undo(self) -> None:

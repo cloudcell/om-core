@@ -276,17 +276,17 @@ def cmd_clear_cache(ctx, scope: str = "all") -> dict:
 
     cleared = False
     if scope == "all":
-        if hasattr(engine, 'clear_caches'):
-            engine.clear_caches()
+        if hasattr(engine._core, '_clear_caches'):
+            engine._core._clear_caches()
             ctx.status("All caches cleared")
             cleared = True
-        elif hasattr(engine, 'clear_cell_cache'):
-            engine.clear_cell_cache()
+        elif hasattr(engine._core, '_clear_cell_cache'):
+            engine._core._clear_cell_cache()
             ctx.status("Cell cache cleared")
             cleared = True
     elif scope == "cell":
-        if hasattr(engine, 'clear_cell_cache'):
-            engine.clear_cell_cache()
+        if hasattr(engine._core, '_clear_cell_cache'):
+            engine._core._clear_cell_cache()
             ctx.status("Cell cache cleared")
             cleared = True
     else:

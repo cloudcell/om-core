@@ -9,3 +9,6 @@ per-workspace settings; change them here and restart.
 # sampling uniformly.  Large values improve accuracy on huge grids
 # but increase query latency when cells are rule-evaluated.
 SELECTION_STATS_MAX_CELLS: int = 10_000_000
+
+# Threshold (seconds) above which rule evaluation is logged as slow.
+SLOW_LOG_THRESHOLD: float = 0.01

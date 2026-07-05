@@ -335,9 +335,14 @@ class RuleEvaluator:
             if op == "**":
                 try:
                     result = l ** r
-                    return self._normalize_ieee_special(_normalize_negative_zero(result))
+                except ValueError:
+                    return CellError("#NUM!")
                 except OverflowError:
                     return CellError("#NUM!")
+                # ZeroDivisionError is intentionally propagated so the engine can map it to #DIV/0!
+                if isinstance(result, complex):
+                    return CellError("#NUM!")
+                return self._normalize_ieee_special(_normalize_negative_zero(result))
             if op == "&":
                 left_s = "" if l is None else str(l)
                 right_s = "" if r is None else str(r)
@@ -1128,7 +1133,12 @@ class RuleEvaluator:
             base = self._eval(node.args[1], resolver, addr)
             if self._is_error(base):
                 return base
-            return math.log(v, base)
+            if base <= 0 or base == 1:
+                return CellError("#NUM!")
+            try:
+                return math.log(v, base)
+            except (ValueError, ZeroDivisionError):
+                return CellError("#NUM!")
         return math.log10(v)
 
     def _fn_log10(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
@@ -1165,7 +1175,20 @@ class RuleEvaluator:
         if self._is_error(base):
             return base
         exp = self._eval(node.args[1], resolver, addr)
-        return exp if self._is_error(exp) else math.pow(base, exp)
+        if self._is_error(exp):
+            return exp
+        # Match spreadsheet semantics: 0 raised to a negative exponent is a division-by-zero error.
+        if base == 0 and exp < 0:
+            return CellError("#DIV/0!")
+        try:
+            result = math.pow(base, exp)
+        except (ValueError, OverflowError):
+            return CellError("#NUM!")
+        except ZeroDivisionError:
+            return CellError("#DIV/0!")
+        if isinstance(result, complex):
+            return CellError("#NUM!")
+        return result
 
     def _fn_sin(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)

@@ -501,7 +501,7 @@ def _ensure_dimension_with_items(engine: Engine, name: str, item_names: list[str
     existing = {it.name for it in dim.items}
     for item_name in item_names:
         if item_name not in existing:
-            engine.add_dimension_item(dim_id, item_name)
+            engine.create_dimension_item(dim_id, item_name)
             existing.add(item_name)
     return dim_id
 

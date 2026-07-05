@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import Any
 
-from lib_openm.event_publisher import EventPublisher
+from lib_openm.ports import EventPublisher
 
 from .message_bus import MessageEnvelope, get_message_bus
 from .event_dto_projector import EventDTOProjector

@@ -582,7 +582,7 @@ def cmd_ensure_group_in_graph(
         for c in (children or [])
     ]
     group_node = OutlineNode(label=label, children=child_nodes)
-    group_node_id = engine.ensure_group_in_graph(
+    group_node_id = engine._core._ensure_group_in_graph(
         dim_id, group_node, parent_group_id=parent_group_id
     )
     return {

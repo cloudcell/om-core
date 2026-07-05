@@ -10,9 +10,13 @@ from typing import Any, Optional
 def _find_or_create_default_view(engine, cube_id: str) -> str:
     """Return a view for the cube, creating a default one if necessary.
 
-    Delegates to the public Engine.find_or_create_default_view method.
+    Uses the read-only ``resolve_default_view_id_by_cube`` first, then
+    ``create_default_view_for_cube`` only when no view exists.
     """
-    return engine.find_or_create_default_view(cube_id)
+    existing_id = engine.resolve_default_view_id_by_cube(cube_id)
+    if existing_id is not None:
+        return existing_id
+    return engine.create_default_view_for_cube(cube_id)
 
 
 def _semantic_addr_to_cell_ref(engine, cube_id: str, dims: list[str], channel: str = "value") -> tuple[str, dict]:

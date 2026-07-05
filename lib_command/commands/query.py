@@ -165,7 +165,7 @@ def cmd_query(
         return {
             "type": "dimension_effective_order",
             "dim_id": dim_id,
-            "item_ids": engine.dimension_effective_order(dim_id),
+            "item_ids": engine._core._dimension_effective_order(dim_id),
         }
 
     if type == "dimension_effective_order_window":
@@ -177,7 +177,7 @@ def cmd_query(
         return {
             "type": "dimension_effective_order_window",
             "dim_id": dim_id,
-            "item_ids": engine.dimension_effective_order_window(dim_id, offset=offset, limit=limit),
+            "item_ids": engine._core._dimension_effective_order_window(dim_id, offset=offset, limit=limit),
         }
 
     # ---- Phase D cell query handlers ----
@@ -324,7 +324,7 @@ def cmd_query(
         return engine.rule_eval_profile_snapshot(top_n=top_n)
 
     if type == "diagnostics_multithread_config":
-        return engine.multithread_recompute_config()
+        return engine._core._multithread_recompute_config()
 
     if type == "diagnostics_dirty_count":
         dirty_keys = engine._dep_graph.dirty_keys()

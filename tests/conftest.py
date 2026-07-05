@@ -183,6 +183,7 @@ def disable_multithread_recompute_by_default(request: pytest.FixtureRequest) -> 
     MT tests should be run FIRST in isolation (before Qt initializes).
     """
     from lib_openm.api import Engine
+    from lib_openm._engine_core import _EngineCore
     
     # If this is an MT-marked test, don't patch anything - allow full MT functionality
     if request.node.get_closest_marker("multithread"):
@@ -190,9 +191,9 @@ def disable_multithread_recompute_by_default(request: pytest.FixtureRequest) -> 
         return
     
     # For non-MT tests: patch to disable MT and force serial fallback
-    original_init = Engine.__init__
-    original_parallel = Engine._recompute_dirty_nodes_parallel
-    original_enable_mt = Engine.enable_multithread_recompute
+    original_init = _EngineCore.__init__
+    original_parallel = _EngineCore._recompute_dirty_nodes_parallel
+    original_enable_mt = _EngineCore.enable_multithread_recompute
     
     def patched_init(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
@@ -208,13 +209,13 @@ def disable_multithread_recompute_by_default(request: pytest.FixtureRequest) -> 
         if max_workers is not None:
             self._multithread_recompute_workers = max(1, int(max_workers))
     
-    Engine.__init__ = patched_init
-    Engine._recompute_dirty_nodes_parallel = patched_parallel
-    Engine.enable_multithread_recompute = patched_enable_mt
+    _EngineCore.__init__ = patched_init
+    _EngineCore._recompute_dirty_nodes_parallel = patched_parallel
+    _EngineCore.enable_multithread_recompute = patched_enable_mt
     yield
-    Engine.__init__ = original_init
-    Engine._recompute_dirty_nodes_parallel = original_parallel
-    Engine.enable_multithread_recompute = original_enable_mt
+    _EngineCore.__init__ = original_init
+    _EngineCore._recompute_dirty_nodes_parallel = original_parallel
+    _EngineCore.enable_multithread_recompute = original_enable_mt
 
 
 @pytest.fixture(autouse=True)
