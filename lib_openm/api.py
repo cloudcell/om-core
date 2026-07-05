@@ -288,10 +288,6 @@ class Engine:
         """
         # Rebuild in-memory ITEM_REF lookup index for fast node resolution
         self._ws.rebuild_item_ref_index()
-        # Canonical in-memory name for the schema-v14 file-level saved default.
-        self.saved_default_view_id = self._ws.active_view_id
-        # Page-axis selections per view and dimension (for cubes >2D).
-        self._page_selection: dict[tuple[str, str], str] = {}
         # Track current pivot view for each cube (for rules like Cube::*.*)
         self._cube_pivot_view: dict[str, str] = {}
         # Per-view cache of computed CellValue keyed by addr to avoid recompute during a render pass.
@@ -544,11 +540,13 @@ class Engine:
         # Record rule diagnostics for deleted items; evaluator surfaces #REF!.
         self._mark_deleted_item_in_all_rules(dim.name, deleted_item_names)
 
-        self._page_selection = {
-            key: item_id
-            for key, item_id in self._page_selection.items()
-            if not (key[1] == dim_id and item_id in delete_ids)
-        }
+        # Drop page selections pointing to deleted items in this dimension.
+        for view in self._ws.views.values():
+            view.page_selections = {
+                d_id: item_id
+                for d_id, item_id in view.page_selections.items()
+                if not (d_id == dim_id and item_id in delete_ids)
+            }
         self._cell_cache.clear()
         self._invalidate_slice_dependent_rules()
         return impact
@@ -3296,17 +3294,6 @@ class Engine:
             "cube_id": view.cube_id,
         })
 
-    def set_view_col_width(self, view_id: str, col_index: int, width: int) -> None:
-        """Set one persisted column width for a view."""
-        view = self.require_view_by_id(view_id)
-        view.col_widths[col_index] = width
-        self._publish_event("view.updated", {
-            "view_id": view_id,
-            "property": "col_widths",
-            "col_index": col_index,
-            "width": width,
-        })
-
     def _remap_view_col_widths(self, view_id: str, old_keys: list[tuple[str, ...]], old_widths: dict[int, int]) -> None:
         """Rebuild view.col_widths after column keys have changed.
 
@@ -3325,53 +3312,6 @@ class Engine:
                 if w is not None:
                     new_widths[new_idx] = w
         view.col_widths = new_widths
-
-    def set_view_row_header_width(self, view_id: str, depth_or_index: int, width: int) -> None:
-        """Set one persisted row-header width for a view."""
-        view = self.require_view_by_id(view_id)
-        view.row_header_widths[depth_or_index] = width
-        self._publish_event("view.updated", {
-            "view_id": view_id,
-            "property": "row_header_widths",
-            "depth_or_index": depth_or_index,
-            "width": width,
-        })
-
-    # ------------------------------------------------------------------
-    # Saved-default view ID (schema-v14 file-level default)
-    # ------------------------------------------------------------------
-
-    @property
-    def active_view_id(self) -> str | None:
-        """Deprecated compatibility alias for saved_default_view_id.
-
-        Runtime callers must use query("active_view_current") or
-        SessionStore.get_view_state(session_id).active_view_id.
-        """
-        return self.saved_default_view_id
-
-    @active_view_id.setter
-    def active_view_id(self, view_id: str | None) -> None:
-        self.saved_default_view_id = view_id
-
-    def set_saved_default_view(self, view_id: str | None) -> None:
-        """Set the schema-v14 file-level saved default view ID.
-
-        This updates the canonical saved default and the workspace mirror.
-        It does NOT update per-session runtime state; that belongs in
-        SessionViewState (SessionStore).
-        """
-        self.saved_default_view_id = view_id
-        self._ws.active_view_id = view_id
-        self._publish_event("view.activated", {"view_id": view_id})
-
-    def set_active_view(self, view_id: str | None) -> None:
-        """Deprecated wrapper for set_saved_default_view.
-
-        TEMPORARY compatibility alias.  Will be removed after caller audit
-        confirms zero runtime usage outside save/load paths.
-        """
-        self.set_saved_default_view(view_id)
 
     def delete_cube(self, cube_id: str) -> bool:
         """Delete a cube and all views that reference it."""
@@ -4821,10 +4761,13 @@ class Engine:
                     )
 
         # Drop page selections pointing to this dimension
-        for key in list(self._page_selection.keys()):
-            if key[1] == dim_id:
-                self._page_selection.pop(key, None)
-        
+        for view in self._ws.views.values():
+            view.page_selections = {
+                d_id: item_id
+                for d_id, item_id in view.page_selections.items()
+                if d_id != dim_id
+            }
+
         # Clear caches to ensure UI reflects changes
         self._cell_cache.clear()
         
@@ -5076,81 +5019,24 @@ class Engine:
                     labels.append(item.name)
         return " | ".join(labels) if labels else ""
 
-    def get_page_item_id(self, view_id: str, dim_id: str) -> str:
-        # Handle special @ dimension (technical dimension for value/fill channels)
+    def _get_page_item_id(self, view_id: str, dim_id: str) -> str | None:
+        """Return the current page item for a dimension, reading from the workspace view.
+
+        Page selections are canonical workspace metadata; the Engine does not
+        cache them. This is a private helper for internal address construction.
+        """
+        view = self._ws.views.get(view_id)
+        if view is None:
+            return None
         if dim_id == "@":
-            # Check if there's a stored selection first
-            key = (view_id, dim_id)
-            if key in self._page_selection:
-                return self._page_selection[key]
-            # Default to @.value
-            return CHANNEL_TO_AT_ID["value"]
-        key = (view_id, dim_id)
-        if key in self._page_selection:
-            item_id = self._page_selection[key]
-            dim = self.require_dimension_by_id(dim_id)
-            item_name = next((it.name for it in dim.items if it.id == item_id), "?")
-            _DEBUG_ENGINE and print(f"[DEBUG get_page_item_id] view={view_id[:8]}, dim={dim_id[:8]} -> item={item_name} (cached)")
+            return view.page_selections.get("@", CHANNEL_TO_AT_ID["value"])
+        item_id = view.page_selections.get(dim_id)
+        if item_id is not None:
             return item_id
         dim = self.require_dimension_by_id(dim_id)
         if not dim.items:
-            _DEBUG_ENGINE and print(f"[DEBUG get_page_item_id] view={view_id[:8]}, dim={dim_id[:8]} -> no items, returning None")
             return None
-        self._page_selection[key] = dim.items[0].id
-        _DEBUG_ENGINE and print(f"[DEBUG get_page_item_id] view={view_id[:8]}, dim={dim_id[:8]} -> item={dim.items[0].name} (default)")
-        return self._page_selection[key]
-
-    def set_page_item_id(self, view_id: str, dim_id: str, item_id: str) -> None:
-        """Set the selected item for a page dimension in a view.
-
-        Stores the page selection in the engine's runtime cache.
-        For the special ``@`` technical dimension, accepts and normalizes
-        value/fill channel identifiers.
-
-        Args:
-            view_id: Stable view identifier.
-            dim_id: Dimension identifier, or ``"@"`` for the technical dimension.
-            item_id: Stable item identifier within the dimension, or a
-                channel identifier (e.g. ``"@.value"``) when ``dim_id == "@"``.
-
-        Raises:
-            ValueError: If ``dim_id == "@"`` and ``item_id`` is not a valid
-                channel identifier.
-            KeyError: If ``item_id`` is not a valid item in the given dimension.
-        """
-        # Handle special @ dimension (technical dimension for value/fill channels)
-        if dim_id == "@":
-            # Accept both legacy @. prefix and canonical at_ prefix
-            if not (item_id.startswith("@.") or item_id.startswith(AT_PREFIX)):
-                raise ValueError(f"Invalid @ dimension item: {item_id}. Must start with '@.' or '{AT_PREFIX}'")
-            # Normalize to canonical form for consistent storage
-            self._page_selection[(view_id, dim_id)] = normalize_technical_item_id(item_id)
-            return
-        dim = self.require_dimension_by_id(dim_id)
-        if item_id not in {it.id for it in dim.items}:
-            raise KeyError(item_id)
-        item_name = next((it.name for it in dim.items if it.id == item_id), "?")
-        print(f"[DEBUG set_page_item_id] view={view_id[:8]}, dim={dim_id[:8]} -> item={item_name}")
-        self._page_selection[(view_id, dim_id)] = item_id
-
-    def sync_view_state_to_workspace(self) -> None:
-        """Sync runtime page selections from Engine to workspace views for persistence.
-
-        Called before saving workspace to persist current page-axis selections.
-        """
-        for (view_id, dim_id), item_id in self._page_selection.items():
-            view = self._ws.views.get(view_id)
-            if view is not None:
-                view.page_selections[dim_id] = item_id
-
-    def sync_view_state_from_workspace(self) -> None:
-        """Sync page selections from workspace views to Engine runtime state.
-
-        Called after loading workspace to restore page-axis selections.
-        """
-        for view_id, view in self._ws.views.items():
-            for dim_id, item_id in view.page_selections.items():
-                self._page_selection[(view_id, dim_id)] = item_id
+        return dim.items[0].id
 
     def _addr_for_view_rc(self, view_id: str, row: int, col: int) -> tuple[str, ...]:
         view = self.require_view_by_id(view_id)
@@ -5184,21 +5070,21 @@ class Engine:
                 if 0 <= i < len(row_key):
                     addr.append(row_key[i])
                 else:
-                    addr.append(self.get_page_item_id(view_id, dim_id))
+                    addr.append(self._get_page_item_id(view_id, dim_id))
             elif dim_id in col_index:
                 i = col_index[dim_id]
                 if 0 <= i < len(col_key):
                     addr.append(col_key[i])
                 else:
-                    addr.append(self.get_page_item_id(view_id, dim_id))
+                    addr.append(self._get_page_item_id(view_id, dim_id))
             elif dim_id == "@":
                 # @ is a page dimension — caller can override channel
                 if channel:
                     addr.append(CHANNEL_TO_AT_ID.get(channel, CHANNEL_TO_AT_ID["value"]))
                 else:
-                    addr.append(self.get_page_item_id(view_id, dim_id))
+                    addr.append(self._get_page_item_id(view_id, dim_id))
             else:
-                addr.append(self.get_page_item_id(view_id, dim_id))
+                addr.append(self._get_page_item_id(view_id, dim_id))
         return tuple(addr)
 
     def _get_cell_value_by_ids(
@@ -8589,7 +8475,7 @@ class Engine:
             raise ValueError(f"Cube {cube_id} has no dimensions; cannot create a default view")
 
         view = self.create_view(
-            name=f"default_view_{cube_id[:8]}",
+            name=f"default_view_{cube_id[:12]}",
             cube_id=cube_id,
             row_dim_id=dim_ids[0],
             col_dim_id=dim_ids[1] if len(dim_ids) > 1 else None,

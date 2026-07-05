@@ -594,7 +594,8 @@ class MainWindow(QtWidgets.QMainWindow):
             from lib_gui.ui_topics import UITopic
             self.session.subscribe(UITopic.STATUS_UPDATE.value, self._on_ui_status_update)
             self.session.subscribe(UITopic.GRID_REFRESH.value, self._on_ui_grid_refresh)
-            self._active_view_id = self.workspace_read_model.active_view_id()
+            active = self.session.query("active_view_current")
+            self._active_view_id = active.get("view_id") if active else None
             if not self._active_view_id:
                 views = self.workspace_read_model.list_views()
                 if views:
@@ -3424,7 +3425,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def _reload_active_view(self) -> None:
         self._set_status_state("computing", "Computing…")
         self._workspace.reload_active_view()
-        view_id = self._workspace.active_view_id
+        # Derive current view from session state, not workspace saved default.
+        result = self.session.query("active_view_current")
+        view_id = result.get("active_view_id") if result else None
         if view_id is not None:
             self._active_view_id = view_id
         self._refresh_error_status(allow_from_computing=True)
@@ -3451,14 +3454,12 @@ class MainWindow(QtWidgets.QMainWindow):
             controllers.append(win.controller)
         return controllers
 
-    def _sync_view_state_to_workspace(self) -> None:
-        """Sync runtime UI state (page selections, active cell, scroll) to workspace views.
+    def _sync_view_state_to_session_store(self) -> None:
+        """Sync runtime UI state (active cell, selection, scroll) to SessionStore.
 
-        Called before saving to persist the current view state.
+        Called before saving to persist the current session view state.
+        Page selections are canonical workspace metadata and do not need syncing.
         """
-        # Sync page selections from Engine to views
-        self.session.execute("set_view_state", direction="to_workspace")
-
         # Sync selection state for ALL views (not just the active one)
         # We need to save each view's individual selection state
         for view in self.workspace_read_model.list_view_dtos():
@@ -3517,10 +3518,11 @@ class MainWindow(QtWidgets.QMainWindow):
             if DEBUG_GUI:
                 print(f"[DEBUG _sync_view_state] workspace: saved active_view_id={view_id[:8]}")
 
-    def _restore_view_state_from_workspace(self) -> None:
-        """Restore runtime UI state (active cell, scroll) from workspace views after loading.
+    def _restore_view_state_from_session_store(self) -> None:
+        """Restore runtime UI state (active cell, scroll) from SessionStore after loading.
 
-        Called after loading to restore the saved view state.
+        Called after loading to restore the per-session view state.
+        Page selections are canonical workspace metadata and are already loaded.
         """
         print(f"\n\n=== RESTORE VIEW STATE CALLED ===\n\n")
         print(f"[DEBUG _restore_view_state] Restoring view state...")
@@ -5758,9 +5760,6 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
         load_profile = getattr(result, "data", {}) or {}
 
-        if not self.is_remote:
-            self.session.execute("set_view_state", direction="from_workspace")
-
         open_profile["load_workspace"] = load_profile
         open_profile["timings_ms"] = {
             "load_workspace": int((time.perf_counter() - t0) * 1000.0),
@@ -5794,8 +5793,8 @@ class MainWindow(QtWidgets.QMainWindow):
         open_profile["timings_ms"]["reload_active_view"] = int((time.perf_counter() - t0) * 1000.0)
 
         if not self.is_remote:
-            # Restore active cell and scroll position from workspace (local-only)
-            self._restore_view_state_from_workspace()
+            # Restore active cell and scroll position from SessionStore (local-only)
+            self._restore_view_state_from_session_store()
 
         # Sync rule bar to show content of restored active cell
         self._sync_rule_bar_from_current()

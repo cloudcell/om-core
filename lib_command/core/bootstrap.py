@@ -413,17 +413,6 @@ def register_default_commands(registry: CommandRegistry | None = None) -> Comman
             params={}
         )
 
-    if not registry.is_registered("set_view_state"):
-        from ..commands.system import cmd_set_view_state
-        registry.register(
-            "set_view_state",
-            "Set View State",
-            CommandCategory.SYSTEM,
-            cmd_set_view_state,
-            description="Sync view-state between engine runtime and workspace",
-            params={"direction": str}
-        )
-
     if not registry.is_registered("set_engine"):
         from ..commands.system import cmd_set_engine
         registry.register(

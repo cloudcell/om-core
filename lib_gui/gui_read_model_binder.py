@@ -221,6 +221,9 @@ class GUIReadModelBinder:
         data = self.session.query("workspace_snapshot")
         if data:
             self.gui_view_model.replace_workspace_snapshot(data)
+        active = self.session.query("active_view_current")
+        if active:
+            self.gui_view_model.set_current_view_id(active.get("view_id"))
         self._refresh_ui()
 
     def _on_workspace_loaded(self, event) -> None:

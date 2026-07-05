@@ -261,18 +261,29 @@ class ViewWorkspaceController(QtCore.QObject):
                 pass
 
         active_view_id: str | None = None
-        if prev_active_view_id is not None and any(v["id"] == prev_active_view_id for v in views):
-            # Use current session's active view if available
+        # Session runtime state is the source of truth for the active view.
+        if self._session is not None:
+            try:
+                current = self._session.query("active_view_current")
+                session_view_id = current.get("view_id") if current else None
+            except Exception:
+                session_view_id = None
+            if session_view_id is not None and any(v["id"] == session_view_id for v in views):
+                active_view_id = session_view_id
+        # Preserve the local controller cache if the session query is unavailable.
+        if active_view_id is None and prev_active_view_id is not None and any(
+            v["id"] == prev_active_view_id for v in views
+        ):
             active_view_id = prev_active_view_id
-        else:
-            # Try to restore from workspace's active_view_id (only views are physically visible)
-            ws_active_view_id = self.workspace_read_model.active_view_id()
-            if ws_active_view_id is not None and any(v["id"] == ws_active_view_id for v in views):
-                active_view_id = ws_active_view_id
-                logging.debug("[DEBUG rebuild_tabs] Restored active view from workspace: %s", active_view_id[:8])
-            # Fall back to first view if no persisted active view
-            if active_view_id is None and views:
-                active_view_id = views[0]["id"]
+        # Initial seed from workspace saved default only when no session state exists yet.
+        if active_view_id is None:
+            ws_saved_default = self.workspace_read_model.saved_default_view_id()
+            if ws_saved_default is not None and any(v["id"] == ws_saved_default for v in views):
+                active_view_id = ws_saved_default
+                logging.debug("[DEBUG rebuild_tabs] Seeded active view from workspace: %s", active_view_id[:8])
+        # Fall back to first view if no active view could be resolved.
+        if active_view_id is None and views:
+            active_view_id = views[0]["id"]
 
         if active_view_id is not None:
             self._active_view_id = active_view_id

@@ -92,7 +92,7 @@ def _reset_session_view_state(ctx) -> None:
     if vs.active_view_id and vs.active_view_id in ws.views:
         active_view_id = vs.active_view_id
     else:
-        active_view_id = ws.active_view_id or (
+        active_view_id = ws.saved_default_view_id or (
             ws.views_order[0] if ws.views_order else (
                 next(iter(ws.views.keys())) if ws.views else None
             )
@@ -149,11 +149,10 @@ def cmd_restore(ctx, snapshot_id: str, new_description: Optional[str] = None) ->
     # Reset session view state to a valid state in the restored workspace.
     _reset_session_view_state(ctx)
 
-    # Post-restore: clear caches and sync view state (only when engine is available)
+    # Post-restore: clear caches (only when engine is available)
     if getattr(ctx, "engine", None) is not None:
-        from .system import cmd_clear_cache, cmd_set_view_state
+        from .system import cmd_clear_cache
         cmd_clear_cache(ctx, scope="all")
-        cmd_set_view_state(ctx, direction="from_workspace")
 
     ctx.status(f"Restored to snapshot: {snapshot_id} (new id: {new_id})")
 

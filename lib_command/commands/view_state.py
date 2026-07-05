@@ -100,7 +100,7 @@ def cmd_set_selection(
     engine = getattr(ctx, "engine", None)
 
     # Validate bounds via engine/view using SessionViewState as source of truth.
-    # Phase 6A: engine.active_view_id fallback removed.
+    # Phase 6A: runtime active view fallback removed from Engine.
     max_row, max_col = 0, 0
     view_id_for_bounds = None
     if session_id:
@@ -167,7 +167,7 @@ def cmd_move_selection(ctx, direction: str, amount: int = 1) -> dict:
             row, col = vs.cursor_row, vs.cursor_col
 
     # Validate bounds via engine/view using SessionViewState as source of truth.
-    # Phase 6A: engine.active_view_id fallback removed.
+    # Phase 6A: runtime active view fallback removed from Engine.
     max_row, max_col = 0, 0
     view_id_for_bounds = None
     if session_id:

@@ -772,7 +772,7 @@ def _serialize_depends(
 def cmd_workspace_summary(ctx, ws) -> WorkspaceSummaryDTO:
     """Get lightweight workspace state (IDs only, no DTOs)."""
     return WorkspaceSummaryDTO(
-        active_view_id=getattr(ws, 'active_view_id', None),
+        saved_default_view_id=getattr(ws, 'saved_default_view_id', None),
         view_ids=list(ws.views.keys()),
         cube_ids=list(ws.cubes.keys()),
     )
@@ -846,7 +846,7 @@ def cmd_workspace_snapshot(ctx, engine, ws) -> WorkspaceSnapshotDTO:
 
     return WorkspaceSnapshotDTO(
         id=ws.id,
-        active_view_id=getattr(ws, 'active_view_id', None),
+        saved_default_view_id=getattr(ws, 'saved_default_view_id', None),
         view_ids=view_ids,
         cube_ids=cube_ids,
         dimension_ids=dimension_ids,
@@ -928,7 +928,7 @@ def cmd_page_selection(engine, view_id: str, dim_id: str) -> dict:
 
     Returns {"type": "page_selection", "view_id": str, "dim_id": str, "item_id": str | None}.
     """
-    item_id = engine.get_page_item_id(view_id, dim_id)
+    item_id = engine._get_page_item_id(view_id, dim_id)
     return {"type": "page_selection", "view_id": view_id, "dim_id": dim_id, "item_id": item_id}
 
 

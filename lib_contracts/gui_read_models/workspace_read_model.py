@@ -11,7 +11,7 @@ Usage:
     views = ws_read_model.list_views()
     cubes = ws_read_model.list_cubes()
     dims = ws_read_model.list_dimensions()
-    active_view_id = ws_read_model.active_view_id()
+    saved_default_view_id = ws_read_model.saved_default_view_id()
 
 Boundary:
     Only plain dicts/lists and primitive values cross this boundary.
@@ -121,11 +121,11 @@ class WorkspaceReadModel:
     # Workspace-level accessors
     # -----------------------------------------------------------------
 
-    def active_view_id(self) -> str | None:
-        """Return the workspace's currently active view ID."""
+    def saved_default_view_id(self) -> str | None:
+        """Return the workspace's file-level saved default view ID."""
         data = self.session.query("workspace_summary")
         if data:
-            return data.get("active_view_id")
+            return data.get("saved_default_view_id")
         return None
 
     def workspace_summary(self) -> dict | None:

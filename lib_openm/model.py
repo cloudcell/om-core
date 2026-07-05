@@ -96,8 +96,6 @@ class Cube:
     # Store base values for cells that have rules - used during rule evaluation
     # to ensure rules reference original values, not computed values
     base_values: dict[tuple[str, ...], Any] = field(default_factory=dict)
-    # Active view for this cube (which view should be displayed when cube is selected)
-    active_view_id: str | None = None
 
     @staticmethod
     def create(name: str, dimension_ids: list[str]) -> "Cube":
@@ -374,6 +372,42 @@ class TableViewSpec:
             page_dim_ids=list(page_dim_ids or []),
         )
 
+    def set_page_item_id(self, dim_id: str, item_id: str | None) -> None:
+        """Set the selected item for a page dimension.
+
+        Validates that dim_id is a page dimension of this view, normalizes
+        item_id for the special @ dimension, and updates self.page_selections.
+        """
+        if item_id is None:
+            self.page_selections.pop(dim_id, None)
+            return
+        if dim_id == "@":
+            if not (item_id.startswith("@.") or item_id.startswith(AT_PREFIX)):
+                raise ValueError(
+                    f"Invalid @ dimension item: {item_id}. Must start with '@.' or '{AT_PREFIX}'"
+                )
+            self.page_selections[dim_id] = normalize_technical_item_id(item_id)
+            return
+        if dim_id not in self.page_dim_ids:
+            raise ValueError(f"Dimension {dim_id} is not a page dimension of view {self.id}")
+        self.page_selections[dim_id] = item_id
+
+    def set_col_width(self, col_index: int, width: int) -> None:
+        """Set one persisted column width for this view."""
+        if col_index < 0:
+            raise ValueError("col_index must be non-negative")
+        if width < 0:
+            raise ValueError("width must be non-negative")
+        self.col_widths[col_index] = width
+
+    def set_row_header_width(self, depth_or_index: int, width: int) -> None:
+        """Set one persisted row-header width for this view."""
+        if depth_or_index < 0:
+            raise ValueError("depth_or_index must be non-negative")
+        if width < 0:
+            raise ValueError("width must be non-negative")
+        self.row_header_widths[depth_or_index] = width
+
 
 def view_layout_from_legacy(view: TableViewSpec) -> ViewLayout:
     """Pure conversion from stored legacy fields to ViewLayout."""
@@ -406,8 +440,8 @@ class Workspace:
     rules: dict[str, Rule] = field(default_factory=dict)
     rule_order: list[str] = field(default_factory=list)
     views_order: list[str] = field(default_factory=list)
-    # Track which view was last active (only views are physically visible)
-    active_view_id: str | None = None
+    # File-level saved default view ID (loaded at open, persisted at save).
+    saved_default_view_id: str | None = None
 
     # ── graph lookup indexes ──
     # In-memory index for fast ITEM_REF node resolution.
@@ -435,6 +469,22 @@ class Workspace:
         from lib_openm.lib_meta.bootstrap import ensure_system_cubes
         ensure_system_cubes(ws)
         return ws
+
+    def set_saved_default_view_id(self, view_id: str | None) -> None:
+        """Set the workspace file-level saved default view ID.
+
+        Rules:
+        - If view_id is None, set saved_default_view_id to None.
+        - If view_id is non-None and exists in self.views, set it.
+        - If view_id is non-None but not in self.views, fall back to the first
+          available view or None.
+        """
+        if view_id is None:
+            self.saved_default_view_id = None
+        elif view_id in self.views:
+            self.saved_default_view_id = view_id
+        else:
+            self.saved_default_view_id = next(iter(self.views), None)
 
     def rebuild_item_ref_index(self) -> int:
         """Scan %RECNOD once and rebuild the in-memory (dim_id, item_id) -> node_id index.
@@ -1264,6 +1314,6 @@ def demo_workspace() -> Workspace:
 
     view = TableViewSpec.create("C", cube.id, dim_a.id, dim_b.id, page_dim_ids=["@"])
     ws.add_view(view)
-    ws.active_view_id = view.id
+    ws.set_saved_default_view_id(view.id)
 
     return ws

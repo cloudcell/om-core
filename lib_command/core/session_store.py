@@ -52,11 +52,9 @@ class SessionStore:
         # set_active_view.  Falls back to deprecated active_view_id alias.
         view_state = SessionViewState(session_id=sid)
         if context is not None:
-            engine = getattr(context, "engine", None)
-            if engine is not None:
-                default_view_id = getattr(
-                    engine, "saved_default_view_id", None
-                ) or getattr(engine, "active_view_id", None)
+            workspace = getattr(context, "workspace", None)
+            if workspace is not None:
+                default_view_id = getattr(workspace, "saved_default_view_id", None)
                 if default_view_id:
                     view_state.active_view_id = default_view_id
         self._view_states[sid] = view_state

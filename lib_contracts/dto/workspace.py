@@ -97,7 +97,7 @@ class DimensionSnapshotDTO(TypedDict):
 class WorkspaceSummaryDTO(TypedDict):
     """Lightweight workspace state: IDs only, no DTOs. Used for quick queries."""
 
-    active_view_id: str | None
+    saved_default_view_id: str | None
     view_ids: list[str]
     cube_ids: list[str]
 
@@ -112,7 +112,7 @@ class WorkspaceSnapshotDTO(TypedDict):
     """
 
     id: str
-    active_view_id: str | None
+    saved_default_view_id: str | None
     view_ids: list[str]
     cube_ids: list[str]
     dimension_ids: list[str]

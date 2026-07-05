@@ -156,7 +156,7 @@ class GUIViewModel:
         all binder updates onto the GUI/main thread using QMetaObject.callLater
         or similar mechanism.
         """
-        self._current_view_id = snapshot.get("active_view_id")
+        self._current_view_id = snapshot.get("saved_default_view_id")
         # Derive current cube from active view (only views are physically visible)
         view_snapshots = snapshot.get("view_snapshots", {})
         active_view = view_snapshots.get(self._current_view_id) if self._current_view_id else None

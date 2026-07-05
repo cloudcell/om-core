@@ -256,7 +256,7 @@ def cmd_set_page_item_id(
 ) -> dict:
     """Set the active page item for a dimension in a view.
 
-    Maps to engine.set_page_item_id(view_id, dim_id, item_id).
+    Mutates the workspace view's page_selections through TableViewSpec.
     """
     if not view_id:
         raise ValueError("view_id is required")
@@ -265,7 +265,8 @@ def cmd_set_page_item_id(
     if not item_id:
         raise ValueError("item_id is required")
 
-    ctx.engine.set_page_item_id(view_id, dim_id, item_id)
+    view = ctx.engine.workspace.views[view_id]
+    view.set_page_item_id(dim_id, item_id)
     return {"affected": 1, "property": "page_selection", "view_id": view_id, "dim_id": dim_id}
 
 

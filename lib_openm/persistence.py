@@ -266,11 +266,11 @@ def save_workspace(path: str, ws: Workspace) -> None:
         # UDF definitions (schema v12+)
         "udfs": udf_list,
     }
-    # Only views are physically active and visible
-    if ws.active_view_id is not None:
-        ws_dict["active_view_id"] = ws.active_view_id
+    # File-level saved default view ID (schema v17 rename from active_view_id)
+    if ws.saved_default_view_id is not None:
+        ws_dict["saved_default_view_id"] = ws.saved_default_view_id
     payload: dict[str, Any] = {
-        "schema_version": 16,  # Schema 16: remove per-view UI selection state from workspace
+        "schema_version": 17,  # Schema 17: rename workspace active_view_id to saved_default_view_id
         "workspace": ws_dict,
     }
 
@@ -700,10 +700,9 @@ def load_workspace_profiled(path: str) -> tuple[Workspace, dict[str, Any]]:
     else:
         ws.views_order = list(ws.views.keys())
 
-    # Load active view ID (only views are physically active and visible)
-    active_view_id = ws_dict.get("active_view_id")
-    if isinstance(active_view_id, str) and active_view_id in ws.views:
-        ws.active_view_id = active_view_id
+    # Load saved default view ID (schema v17 key; fall back to v16 active_view_id)
+    loaded_default_view_id = ws_dict.get("saved_default_view_id", ws_dict.get("active_view_id"))
+    ws.set_saved_default_view_id(loaded_default_view_id)
 
     # Ensure @ technical dimension exists with all standard items
     # This handles both new workspaces and loaded workspaces that may be missing

@@ -69,7 +69,7 @@ def cmd_save(ctx, path: Optional[str] = None) -> dict:
                 vs.active_view_id = active_view_id
 
             # Update workspace-level saved default
-            ws.active_view_id = active_view_id
+            ws.set_saved_default_view_id(active_view_id)
 
     save_path = path or "auto"
 
@@ -123,16 +123,16 @@ def cmd_load(ctx, path: str) -> dict:
                     store.set_view_state(session_id, vs)
                 if vs is not None:
                     # Workspace-level active view default is the initial session default
-                    if ws.active_view_id:
-                        vs.active_view_id = ws.active_view_id
+                    if ws.saved_default_view_id:
+                        vs.active_view_id = ws.saved_default_view_id
 
                     # Migrate legacy per-view UI state from schema <=15 files
                     legacy_ui_state = profile.get("legacy_ui_state", {})
                     active_view_id = vs.active_view_id
                     if active_view_id and active_view_id in legacy_ui_state:
                         active_state = legacy_ui_state[active_view_id]
-                    elif ws.active_view_id and ws.active_view_id in ws.views:
-                        active_state = legacy_ui_state.get(ws.active_view_id, {})
+                    elif ws.saved_default_view_id and ws.saved_default_view_id in ws.views:
+                        active_state = legacy_ui_state.get(ws.saved_default_view_id, {})
                     else:
                         active_state = next(iter(legacy_ui_state.values()), {}) if legacy_ui_state else {}
 
@@ -165,8 +165,6 @@ def cmd_load(ctx, path: str) -> dict:
             if engine is not None:
                 engine.replace_workspace(ws)
                 ctx.workspace = engine.workspace
-                if ws.active_view_id:
-                    engine.saved_default_view_id = ws.active_view_id
 
             variables = getattr(ctx, "variables", None)
             if variables is not None:
@@ -433,31 +431,6 @@ def cmd_redo(ctx) -> dict:
     else:
         ctx.status("Redo not supported by engine")
         return {"changed": False, "description": None, "affected_scope": None}
-
-
-def cmd_set_view_state(ctx, direction: str = "from_workspace") -> dict:
-    """Sync view-state (page selections) between engine runtime and workspace.
-
-    Args:
-        direction: "from_workspace" — copy workspace view page selections into
-                   engine runtime state (used after load/restore).
-                   "to_workspace" — copy engine runtime page selections into
-                   workspace views for persistence (used before save).
-    """
-    engine = ctx.engine
-    if not engine:
-        raise ValueError("No engine available")
-
-    if direction == "from_workspace":
-        if hasattr(engine, 'sync_view_state_from_workspace'):
-            engine.sync_view_state_from_workspace()
-        return {"direction": "from_workspace", "status": "completed"}
-    elif direction == "to_workspace":
-        if hasattr(engine, 'sync_view_state_to_workspace'):
-            engine.sync_view_state_to_workspace()
-        return {"direction": "to_workspace", "status": "completed"}
-    else:
-        raise ValueError(f"Invalid direction: {direction}")
 
 
 def cmd_set_engine(ctx, engine_type: str = "python", dependency_tracking: bool = True) -> dict:

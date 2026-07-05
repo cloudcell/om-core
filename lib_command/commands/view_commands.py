@@ -106,7 +106,8 @@ def cmd_set_view_col_width(
         raise ValueError("col_index must be non-negative")
     if width < 0:
         raise ValueError("width must be non-negative")
-    ctx.engine.set_view_col_width(view_id, col_index, width)
+    view = ctx.engine.require_view_by_id(view_id)
+    view.set_col_width(col_index, width)
     return {
         "affected": 1,
         "property": "col_widths",
@@ -129,7 +130,8 @@ def cmd_set_view_row_header_width(
         raise ValueError("depth_or_index must be non-negative")
     if width < 0:
         raise ValueError("width must be non-negative")
-    ctx.engine.set_view_row_header_width(view_id, depth_or_index, width)
+    view = ctx.engine.require_view_by_id(view_id)
+    view.set_row_header_width(depth_or_index, width)
     return {
         "affected": 1,
         "property": "row_header_widths",
