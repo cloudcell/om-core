@@ -124,11 +124,12 @@ def run_gui_in_thread() -> tuple[threading.Thread, Any, QtWidgets.QApplication, 
 
     def qt_thread_target():
         # macOS uses the application name for the menu bar and About menu.
-        # Configure it statically before creating QApplication.
+        # Configure it statically before creating QApplication and pass OM Core as
+        # argv[0] so the native menu bar shows "OM Core" instead of "python".
         QtCore.QCoreApplication.setApplicationName("OM Core")
         if sys.platform == "darwin":
             QtGui.QGuiApplication.setApplicationDisplayName("OM Core")
-        app = QtWidgets.QApplication([])
+        app = QtWidgets.QApplication(["OM Core"])
         app.setApplicationName("OM Core")
         if sys.platform == "darwin":
             app.setApplicationDisplayName("OM Core")

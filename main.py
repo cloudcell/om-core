@@ -265,7 +265,11 @@ def _run_gui_only():
     QtCore.QCoreApplication.setApplicationName("OM Core")
     if sys.platform == "darwin":
         QtGui.QGuiApplication.setApplicationDisplayName("OM Core")
-    app = QtWidgets.QApplication(sys.argv)
+    # macOS derives the app-menu name and menu-bar title from argv[0].
+    # Replace the script name with OM Core so the app shows "OM Core" instead
+    # of "python" / "main.py".
+    argv = ["OM Core"] + sys.argv[1:]
+    app = QtWidgets.QApplication(argv)
     app.setApplicationName("OM Core")
     if sys.platform == "darwin":
         app.setApplicationDisplayName("OM Core")
