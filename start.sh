@@ -27,6 +27,43 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_wait_for_transport() {
+    # Block until the runtime transport endpoint is accepting connections.
+    # This prevents the TUI client from launching before the runtime is ready.
+    local max_wait=30
+    local waited=0
+    local socket_path="${OPENM_TRANSPORT_SOCKET:-/tmp/openm-${USER:-unknown}.sock}"
+    local host="${OPENM_TRANSPORT_HOST:-127.0.0.1}"
+    local port="${OPENM_TRANSPORT_PORT:-17391}"
+
+    echo "Waiting for OM runtime to be ready..."
+    while [ "$waited" -lt "$max_wait" ]; do
+        if [ -n "$OPENM_TRANSPORT_SOCKET" ] || { [ -z "$OPENM_TRANSPORT_HOST" ] && [ -z "$OPENM_TRANSPORT_PORT" ]; }; then
+            # Unix-domain socket (explicit or default)
+            if [ -S "$socket_path" ]; then
+                if $PYTHON -c "import socket, sys; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(1); s.connect(sys.argv[1]); s.close()" "$socket_path" 2>/dev/null; then
+                    echo "Runtime ready."
+                    return 0
+                fi
+            fi
+        else
+            # TCP mode
+            if $PYTHON -c "import socket, sys; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(1); s.connect((sys.argv[1], int(sys.argv[2]))); s.close()" "$host" "$port" 2>/dev/null; then
+                echo "Runtime ready."
+                return 0
+            fi
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    echo "Warning: OM runtime did not become ready within ${max_wait}s; TUI may fail to connect."
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # Mode dispatch
 # ---------------------------------------------------------------------------
 
@@ -98,10 +135,10 @@ else
     disown $GUI_PID 2>/dev/null || true
     GUI_PID=""
 
-    # Brief pause to let transport server initialise
-    sleep 1
-
     if [ "$OPEN_TUI" -eq 1 ]; then
+        # Wait for the runtime transport to be ready before opening the TUI.
+        _wait_for_transport
+
         echo "Opening TUI in a separate terminal..."
         TUI_CMD="cd \"$SCRIPT_DIR\" && ./start.sh --tui"
 
