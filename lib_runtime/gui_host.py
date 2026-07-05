@@ -19,6 +19,55 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from lib_runtime.app_host import create_runtime_context
 
 
+def _set_macos_app_menu_title(title: str) -> None:
+    """Force the macOS application menu title in the menu bar.
+
+    When running from a Python script (not a .app bundle), macOS shows the
+    Python process name as the application menu title. Qt's
+    setApplicationDisplayName does not override that title. We set the title
+    of NSApp.mainMenu's first item directly via the Objective-C runtime.
+    """
+    if sys.platform != "darwin":
+        return
+
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        ctypes.cdll.LoadLibrary(ctypes.util.find_library("AppKit"))
+
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+
+        def _sel(name: str) -> ctypes.c_void_p:
+            return objc.sel_registerName(name.encode())
+
+        def _send(ret_type, *arg_types):
+            return ctypes.CFUNCTYPE(ret_type, *arg_types)(objc.objc_msgSend.address)
+
+        send_pp = _send(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)
+        ns_app = send_pp(objc.objc_getClass(b"NSApplication"), _sel("sharedApplication"))
+
+        main_menu = send_pp(ns_app, _sel("mainMenu"))
+        first_item = _send(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64)(
+            main_menu, _sel("itemAtIndex:"), 0
+        )
+        title_str = _send(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p)(
+            objc.objc_getClass(b"NSString"), _sel("stringWithUTF8String:"), title.encode()
+        )
+        _send(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(
+            first_item, _sel("setTitle:"), title_str
+        )
+    except Exception:
+        # If the Objective-C runtime dance fails, the app still starts; the
+        # menu bar just keeps the Python process name.
+        pass
+
+
 def run_with_splash(
     app: QtWidgets.QApplication,
     splash: Any,
@@ -111,6 +160,7 @@ QTabBar::tab:!selected {
     splash.close()
     win.show()
     win.restore_window_state_now()
+    _set_macos_app_menu_title("OM Core")
     app.exec()
 
 
@@ -191,6 +241,7 @@ def run_gui_in_thread() -> tuple[threading.Thread, Any, QtWidgets.QApplication, 
             splash.close()
         win.show()
         win.restore_window_state_now()
+        _set_macos_app_menu_title("OM Core")
 
         result_container['app'] = app
         result_container['window'] = win
@@ -248,8 +299,15 @@ def start_gui(endpoint: Any | None = None) -> None:
     if endpoint is None:
         endpoint = _resolve_client_endpoint()
 
-    app = QtWidgets.QApplication(sys.argv)
-    app.setApplicationName("OM")
+    # macOS app name handling
+    QtCore.QCoreApplication.setApplicationName("OM Core")
+    if sys.platform == "darwin":
+        QtGui.QGuiApplication.setApplicationDisplayName("OM Core")
+    argv = ["OM Core"] + sys.argv[1:]
+    app = QtWidgets.QApplication(argv)
+    app.setApplicationName("OM Core")
+    if sys.platform == "darwin":
+        app.setApplicationDisplayName("OM Core")
     _setup_app_palette_and_styles(app)
 
     # Create and show splash screen
@@ -317,6 +375,7 @@ def start_gui(endpoint: Any | None = None) -> None:
 
         win.show()
         win.restore_window_state_now()
+        _set_macos_app_menu_title("OM Core")
 
         def on_about_to_quit():
             win._save_window_state()
