@@ -258,7 +258,7 @@ class DeleteDimensionItemCommand:
     description: str = field(default="Delete dimension item", init=False)
 
     def __post_init__(self):
-        dim = self.engine.get_dimension(self.dim_id)
+        dim = self.engine.require_dimension_by_id(self.dim_id)
         item = dim.get_item(self.item_id)
         if item:
             self.item_data = {
@@ -290,7 +290,7 @@ class DeleteDimensionItemCommand:
             name=self.item_data['name'],
             sequence=self.item_data['sequence'],
         )
-        dim = self.engine.get_dimension(self.dim_id)
+        dim = self.engine.require_dimension_by_id(self.dim_id)
         dim.items.append(item)
         dim.items.sort(key=lambda x: x.sequence)
 
@@ -315,7 +315,7 @@ class RenameDimensionItemCommand:
     description: str = field(default="Rename item", init=False)
 
     def __post_init__(self):
-        dim = self.engine.get_dimension(self.dim_id)
+        dim = self.engine.require_dimension_by_id(self.dim_id)
         item = dim.get_item(self.item_id)
         if item:
             self.old_name = item.name
@@ -360,7 +360,7 @@ class DeleteDimensionCommand:
     description: str = field(default="Delete dimension", init=False)
 
     def __post_init__(self):
-        dim = self.engine.get_dimension(self.dim_id)
+        dim = self.engine.require_dimension_by_id(self.dim_id)
         if dim:
             self.dim_data = {
                 'id': dim.id,

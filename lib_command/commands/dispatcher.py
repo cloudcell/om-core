@@ -215,9 +215,14 @@ def _set_session_property(
     # Store in context variables (the bus-style session store)
     if property in ("id", "value", ""):
         ctx.variables[var_name] = value
-        # Route active_view through Engine API so event.view.activated is emitted
-        if session_key == "active_view" and ctx.engine:
-            ctx.engine.set_active_view(value)
+        # Runtime active view is session state. If a session store is available,
+        # route the active_view session variable through it so queries like
+        # active_view_current return the same value.
+        if session_key == "active_view":
+            session_id = getattr(ctx, "session_id", None)
+            if session_id:
+                from lib_command.core.session_store import get_session_store
+                get_session_store().set_active_view(session_id, value)
         ctx.status(f"Session {session_key} set to {value}")
         return {session_key: value}
     else:

@@ -101,8 +101,7 @@ def _set_value_at_address(engine: Any, address: str, value: Any) -> bool:
             return False
         cube_id = cube.id
 
-        addr_tuple = ("@.value",) + tuple(dims)
-        engine.set_cell_value_by_addr(cube_id, addr_tuple, value)
+        engine.set_cell_hardvalue_by_addr(cube_id, ("@.value",) + tuple(dims), value)
         return True
     except Exception:
         return False
@@ -125,8 +124,9 @@ def _set_rule_body_at_address(engine: Any, address: str, rule_body: str) -> bool
             return False
         cube_id = cube.id
 
-        addr_tuple = ("@.value",) + tuple(dims)
-        engine.set_cell_rule_by_addr(cube_id, addr_tuple, rule_body)
+        from .utils import _semantic_addr_to_cell_ref
+        view_id, cell_ref = _semantic_addr_to_cell_ref(engine, cube_id, dims, channel="value")
+        engine.set_rule_anchored(view_id, cell_ref, rule_body)
         return True
     except Exception:
         return False

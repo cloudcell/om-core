@@ -7,7 +7,6 @@ import itertools
 import json
 import threading
 import time
-import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -231,46 +230,21 @@ class Engine:
         """Canonical: return a view by stable ID. Raises KeyError if absent."""
         return self._ws.views[view_id]
 
-    def get_view(self, view_id: str) -> TableViewSpec:
-        """DEPRECATED alias. Use require_view_by_id."""
-        warnings.warn("get_view is deprecated; use require_view_by_id", DeprecationWarning, stacklevel=2)
-        return self.require_view_by_id(view_id)
-
     def require_dimension_by_id(self, dim_id: str) -> Dimension:
         """Canonical: return a dimension by stable ID. Raises KeyError if absent."""
         return self._ws.dimensions[dim_id]
-
-    def get_dimension(self, dim_id: str) -> Dimension:
-        """DEPRECATED alias. Use require_dimension_by_id."""
-        warnings.warn("get_dimension is deprecated; use require_dimension_by_id", DeprecationWarning, stacklevel=2)
-        return self.require_dimension_by_id(dim_id)
 
     def dimension_outline_for_dim(self, dim_id: str) -> list[Any]:
         """Canonical: return cached outline for a dimension; rebuilds lazily if stale."""
         return self._ws.get_outline(dim_id)
 
-    def get_dimension_outline(self, dim_id: str) -> list[Any]:
-        """DEPRECATED alias. Use dimension_outline_for_dim."""
-        warnings.warn("get_dimension_outline is deprecated; use dimension_outline_for_dim", DeprecationWarning, stacklevel=2)
-        return self.dimension_outline_for_dim(dim_id)
-
     def require_cube_by_id(self, cube_id: str) -> Cube:
         """Canonical: return a cube by stable ID. Raises KeyError if absent."""
         return self._ws.cubes[cube_id]
 
-    def get_cube(self, cube_id: str) -> Cube:
-        """DEPRECATED alias. Use require_cube_by_id."""
-        warnings.warn("get_cube is deprecated; use require_cube_by_id", DeprecationWarning, stacklevel=2)
-        return self.require_cube_by_id(cube_id)
-
     def find_cube_by_id(self, cube_id: str) -> Cube | None:
         """Canonical: return a cube by stable ID, or None if not found."""
         return self._ws.cubes.get(cube_id)
-
-    def get_cube_safe(self, cube_id: str) -> Cube | None:
-        """DEPRECATED alias. Use find_cube_by_id."""
-        warnings.warn("get_cube_safe is deprecated; use find_cube_by_id", DeprecationWarning, stacklevel=2)
-        return self.find_cube_by_id(cube_id)
 
     def list_cube_ids(self) -> list[str]:
         """Return all cube IDs in the workspace."""
@@ -295,11 +269,6 @@ class Engine:
         )
         rule_count = sum(1 for r in self._ws.rules.values() if r.cube_id == cube_id)
         return {"anchored_rules": anchored_count, "rules": rule_count}
-
-    def get_rule_counts(self, cube_id: str) -> dict[str, int]:
-        """DEPRECATED alias. Use rule_counts_for_cube."""
-        warnings.warn("get_rule_counts is deprecated; use rule_counts_for_cube", DeprecationWarning, stacklevel=2)
-        return self.rule_counts_for_cube(cube_id)
 
     def ensure_group_in_graph(
         self,
@@ -373,11 +342,6 @@ class Engine:
         except Exception:
             self._ws = previous_ws
             raise
-
-    def set_workspace(self, ws: Any) -> None:
-        """DEPRECATED alias. Use replace_workspace."""
-        warnings.warn("set_workspace is deprecated; use replace_workspace", DeprecationWarning, stacklevel=2)
-        self.replace_workspace(ws)
 
     def clear_caches(self) -> None:
         """Clear internal evaluation caches. Call after loading a new workspace."""
@@ -4499,12 +4463,12 @@ class Engine:
 
         return group_id
 
-    def add_aggregate_item(self, dim_id: str, group_node_id: str, name: str) -> AddAggregateItemResult:
+    def create_aggregate_item(self, dim_id: str, group_node_id: str, name: str) -> AddAggregateItemResult:
         """Create a new dimension item that aggregates a group.
 
-        Validates naming, creates the item, ensures graph node, and creates
-        the AGGREG_OF edge. Returns AddAggregateItemResult with item, node,
-        edge, and group identifiers.
+        Canonical method. Validates naming, creates the item, ensures graph
+        node, and creates the AGGREG_OF edge. Returns AddAggregateItemResult
+        with item, node, edge, and group identifiers.
         Raises ValueError on naming conflict.
         """
         from lib_openm.outline_graph_bridge import ensure_item_node, _add_aggregate_edge
@@ -5361,7 +5325,10 @@ class Engine:
         finally:
             eval_stack.discard(key)
 
-    def _set_cell_hardvalue_by_ids(self, view_id: str, row_key: tuple[str, ...], col_key: tuple[str, ...], value: Any) -> None:
+    def _set_cell_hardvalue_by_ids(
+        self, view_id: str, row_key: tuple[str, ...], col_key: tuple[str, ...], value: Any,
+        channel: str | None = None,
+    ) -> None:
         print(f"[DEBUG SET_CELL_BY_KEYS] CALLED view_id={view_id[:20] if view_id else None}... value={value}")
         if _DEBUG_SET_CELL:
             print(f"DEBUG SET_CELL_BY_KEYS: called view_id={view_id}, row_key={row_key}, col_key={col_key}, value={value}")
@@ -5369,7 +5336,7 @@ class Engine:
             traceback.print_stack(limit=5)
         view = self.require_view_by_id(view_id)
         cube = self.require_cube_by_id(view.cube_id)
-        addr = self._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key)
+        addr = self._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key, channel=channel)
         print(f"[DEBUG SET_CELL_BY_KEYS] addr={addr}")
         if _DEBUG_SET_CELL:
             print(f"DEBUG SET_CELL_BY_KEYS: addr={addr}")
@@ -5386,11 +5353,14 @@ class Engine:
         self._undo.push_and_do(_CellEditAction(engine=self, cube=cube, addr=addr, before=prev, after=value))
         print(f"[DEBUG SET_CELL_BY_KEYS] COMPLETE")
 
-    def _clear_cell_hardvalue_by_ids(self, view_id: str, row_key: tuple[str, ...], col_key: tuple[str, ...]) -> None:
+    def _clear_cell_hardvalue_by_ids(
+        self, view_id: str, row_key: tuple[str, ...], col_key: tuple[str, ...],
+        channel: str | None = None,
+    ) -> None:
         """
         Remove any explicit override so the underlying rule body/rule (if any) is revealed.
         """
-        self._set_cell_hardvalue_by_ids(view_id, row_key=row_key, col_key=col_key, value=None)
+        self._set_cell_hardvalue_by_ids(view_id, row_key=row_key, col_key=col_key, value=None, channel=channel)
 
     # ------------------------------------------------------------------
     # Private helpers: name-based lookup
@@ -5486,10 +5456,15 @@ class Engine:
         return self.cell_value_for_view_rc(view_id, row=row_idx, col=col_idx)
 
     def _set_cell_hardvalue_by_idx(self, view_id: str, row_idx: int, col_idx: int, value: Any) -> None:
-        self.set_cell(view_id, row=row_idx, col=col_idx, value=value)
+        cube = self.require_cube_by_id(self.require_view_by_id(view_id).cube_id)
+        addr = self._addr_for_view_rc(view_id, row_idx, col_idx)
+        prev = cube.get(addr)
+        if prev == value:
+            return
+        self._undo.push_and_do(_CellEditAction(engine=self, cube=cube, addr=addr, before=prev, after=value))
 
     def _clear_cell_hardvalue_by_idx(self, view_id: str, row_idx: int, col_idx: int) -> None:
-        self.clear_cell(view_id, row=row_idx, col=col_idx)
+        self._set_cell_hardvalue_by_idx(view_id, row_idx, col_idx, value=None)
 
     def _set_rule_anchored_by_idx(
         self, view_id: str, row_idx: int, col_idx: int, expression: str
@@ -5547,6 +5522,7 @@ class Engine:
                 row_key=tuple(cell_ref["row_key"]),
                 col_key=tuple(cell_ref["col_key"]),
                 value=value,
+                channel=cell_ref.get("channel"),
             )
         elif kind == "name":
             self._set_cell_hardvalue_by_name(
@@ -5570,6 +5546,7 @@ class Engine:
                 view_id,
                 row_key=tuple(cell_ref["row_key"]),
                 col_key=tuple(cell_ref["col_key"]),
+                channel=cell_ref.get("channel"),
             )
         elif kind == "name":
             self._clear_cell_hardvalue_by_name(
@@ -8341,28 +8318,6 @@ class Engine:
         finally:
             eval_stack.discard(key)
 
-    def get_cell(self, view_id: str, row: int, col: int) -> CellValue:
-        """DEPRECATED alias. Use cell_value_for_view_rc."""
-        warnings.warn("get_cell is deprecated; use cell_value_for_view_rc", DeprecationWarning, stacklevel=2)
-        return self.cell_value_for_view_rc(view_id, row, col)
-
-    def set_cell(self, view_id: str, row: int, col: int, value: Any) -> None:
-        print(f"[DEBUG SET_CELL] view_id={view_id[:20] if view_id else None}... row={row} col={col} value={value}")
-        view = self.require_view_by_id(view_id)
-        cube = self.require_cube_by_id(view.cube_id)
-        addr = self._addr_for_view_rc(view_id, row, col)
-        prev = cube.get(addr)
-        if prev == value:
-            print(f"[DEBUG SET_CELL] SKIP: prev==value ({prev})")
-            return
-
-        print(f"[DEBUG SET_CELL] Creating _CellEditAction addr={addr}")
-        self._undo.push_and_do(_CellEditAction(engine=self, cube=cube, addr=addr, before=prev, after=value))
-        print(f"[DEBUG SET_CELL] COMPLETE")
-
-    def clear_cell(self, view_id: str, row: int, col: int) -> None:
-        self.set_cell(view_id, row, col, None)
-
     def get_range(self, view_id: str, top: int, left: int, bottom: int, right: int) -> list[list[Any]]:
         out: list[list[Any]] = []
         for r in range(top, bottom + 1):
@@ -8585,69 +8540,96 @@ class Engine:
             self._cell_cache.clear()
             raise
 
-    def set_cell_rule(self, view_id: str, row: int, col: int, expression: str) -> None:
+    def set_cell_hardvalue_by_addr(
+        self, cube_id: str, addr: tuple[str, ...], value: Any
+    ) -> None:
+        """Set a cell hardvalue given a full cube address tuple.
+
+        This is the canonical replacement for the deprecated
+        ``set_cell_value_by_addr``.  It normalizes the address, resolves or
+        creates a default view, and delegates to ``set_cell_hardvalue``.
+        """
+        cube = self.require_cube_by_id(cube_id)
+        full_addr = _normalize_addr_for_cube(cube, addr)
+        view_id = self._find_or_create_default_view(cube_id)
         view = self.require_view_by_id(view_id)
-        cube = self.require_cube_by_id(view.cube_id)
-        expression = self._normalize_expression(expression)
-
-        # Fan-out: apply the same rule across all columns for this row.
-        # This matches common pivot/spreadsheet behavior where a measure row
-        # rule should compute for every column item (e.g. every Month).
-        col_count = self.view_col_count(view_id)
-        if col_count > 0:
-            for c in range(col_count):
-                addr = self._addr_for_view_rc(view_id, row, c)
-                self._validate_cell_rule_addr(cube, addr, expression)
-            for c in range(col_count):
-                addr = self._addr_for_view_rc(view_id, row, c)
-                self._ws.upsert_cell_rule(cube.id, addr, expression)
-                cube.user_override_addrs.discard(addr)
-            self._cell_cache.clear()
-            return
-
-        # Fallback: single-cell assignment (e.g. no column axes)
-        addr = self._addr_for_view_rc(view_id, row, col)
-        self._validate_cell_rule_addr(cube, addr, expression)
-        self._ws.upsert_cell_rule(cube.id, addr, expression)
-        cube.user_override_addrs.discard(addr)
-        self._cell_cache.clear()
-        # Track cells with volatile functions
-        self._track_volatile_cell(cube.id, addr, expression)
-
-    def set_cell_value_by_addr(self, cube_id: str, addr: tuple[str, ...], value: CellValueScalar | None) -> None:
-        _DEBUG_SET_CELL and print(f"DEBUG SET_CELL: set_cell_value_by_addr called cube_id={cube_id}, addr={addr}, value={value}")
-        cube = self.require_cube_by_id(cube_id)
-        # Normalize address to handle @ dimension (short addresses are padded with @.value)
-        full_addr = _normalize_addr_for_cube(cube, addr)
-        _DEBUG_SET_CELL and print(f"DEBUG SET_CELL: setting cube.data[{full_addr}] = {value}")
-        cube.set(full_addr, value)
-        if value is not None:
-            _DEBUG_SET_CELL and print(f"DEBUG SET_CELL: adding {full_addr} to user_override_addrs")
-            cube.user_override_addrs.add(full_addr)
+        row_dim_count = len(view.row_dim_ids)
+        body = tuple(item_id for dim_id, item_id in zip(cube.dimension_ids, full_addr) if dim_id != "@")
+        channel = next(
+            (full_addr[i] for i, dim_id in enumerate(cube.dimension_ids) if dim_id == "@"),
+            None,
+        )
+        if channel is not None:
+            channel = channel.replace("at_", "")
+        cell_ref = {
+            "kind": "ids",
+            "row_key": body[:row_dim_count],
+            "col_key": body[row_dim_count:],
+            "channel": channel,
+        }
+        if value is None:
+            self.clear_cell_hardvalue(view_id, cell_ref)
         else:
-            _DEBUG_SET_CELL and print(f"DEBUG SET_CELL: removing {full_addr} from user_override_addrs")
-            cube.user_override_addrs.discard(full_addr)
-        self._cell_cache.clear()
-        self._on_cell_value_changed(cube_id, full_addr)
+            self.set_cell_hardvalue(view_id, cell_ref, value)
 
-    def set_cell_rule_by_addr(self, cube_id: str, addr: tuple[str, ...], expression: str) -> None:
+    def find_or_create_default_view(self, cube_id: str) -> str:
+        """Return a view for the cube, creating a default one if necessary.
+
+        Default layout: first dimension as rows, remaining as columns.
+        """
+        for view in self.list_views():
+            view_id = getattr(view, "id", view)
+            view_obj = self.require_view_by_id(view_id)
+            if getattr(view_obj, "cube_id", None) == cube_id:
+                return view_id
+
         cube = self.require_cube_by_id(cube_id)
-        # Normalize address to handle @ dimension (short addresses are padded with @.value)
+        dim_ids = [d for d in cube.dimension_ids if d != "@"]
+        if not dim_ids:
+            raise ValueError(f"Cube {cube_id} has no dimensions; cannot create a default view")
+
+        view = self.create_view(
+            name=f"default_view_{cube_id[:8]}",
+            cube_id=cube_id,
+            row_dim_id=dim_ids[0],
+            col_dim_id=dim_ids[1] if len(dim_ids) > 1 else None,
+            page_dim_ids=dim_ids[2:] if len(dim_ids) > 2 else [],
+        )
+        return view.id
+
+    def _find_or_create_default_view(self, cube_id: str) -> str:
+        """Internal alias for the public method."""
+        return self.find_or_create_default_view(cube_id)
+
+    def addr_to_cell_ref(self, cube_id: str, addr: tuple[str, ...]) -> dict:
+        """Split a positional tuple into a channel-aware cell_ref.
+
+        Uses the cube's default view to determine the row/col split.
+        """
+        cube = self.require_cube_by_id(cube_id)
         full_addr = _normalize_addr_for_cube(cube, addr)
-        expression = self._normalize_expression(expression)
-        self._validate_cell_rule_addr(cube, full_addr, expression)
-        # CRITICAL: Clear hardnumber override BEFORE upserting rule
-        # This ensures the rule takes precedence over any existing hardcoded value
-        cube.user_override_addrs.discard(full_addr)
-        # CRITICAL: Clear the cell value so the rule computes fresh
-        # The old hardcoded value should not persist after rule is set
-        cube.set(full_addr, None)
-        self._ws.upsert_cell_rule(cube.id, full_addr, expression)
-        self._cell_cache.clear()
-        # Track cells with volatile functions
-        self._track_volatile_cell(cube_id, full_addr, expression)
-        # Compute the rule value immediately so it's available without requiring cell access first
-        self._get_cell_by_addr(cube, full_addr)
+        view_id = self.find_or_create_default_view(cube_id)
+        view = self.require_view_by_id(view_id)
+        row_dim_count = len(view.row_dim_ids)
+        body = tuple(item_id for dim_id, item_id in zip(cube.dimension_ids, full_addr) if dim_id != "@")
+        channel = next(
+            (full_addr[i] for i, dim_id in enumerate(cube.dimension_ids) if dim_id == "@"),
+            None,
+        )
+        if channel is not None:
+            channel = channel.replace("at_", "")
+        return {
+            "kind": "ids",
+            "row_key": body[:row_dim_count],
+            "col_key": body[row_dim_count:],
+            "channel": channel,
+        }
+
+    def set_rule_anchored_by_addr(self, cube_id: str, addr: tuple[str, ...], expression: str) -> None:
+        """Attach an anchored rule to a cell given by a positional cube address."""
+        view_id = self.find_or_create_default_view(cube_id)
+        cell_ref = self.addr_to_cell_ref(cube_id, addr)
+        self.set_rule_anchored(view_id, cell_ref, expression)
 
     def _set_rule_anchored_by_ids(
         self, view_id: str, row_key: tuple[str, ...], col_key: tuple[str, ...], expression: str
@@ -9161,6 +9143,8 @@ class Engine:
             self._on_cell_value_changed(cube.id, full_addr)
             # Compute the rule value immediately so it's available without requiring cell access first
             self._get_cell_by_addr(cube, full_addr)
+            # Track volatile cells just like the deprecated set_cell_rule_by_addr path
+            self._track_volatile_cell(cube.id, full_addr, expression)
 
     def apply_rule_batch(
         self,

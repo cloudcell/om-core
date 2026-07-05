@@ -52,7 +52,8 @@ def cmd_set_cell(
 ) -> dict:
     """Set a cell value by row/column indices.
 
-    Maps to engine.set_cell(view_id, row, col, value).
+    Macro-language compatibility command.  Converts row/column indices into a
+    ``cell_ref`` and delegates to the canonical ``engine.set_cell_hardvalue``.
     """
     if not view_id:
         raise ValueError("view_id is required")
@@ -62,7 +63,8 @@ def cmd_set_cell(
         raise ValueError("col must be non-negative")
 
     coerced = coerce_user_value(value)
-    ctx.engine.set_cell(view_id, row, col, coerced)
+    cell_ref = {"kind": "idx", "row_idx": row, "col_idx": col}
+    ctx.engine.set_cell_hardvalue(view_id, cell_ref, coerced)
     return {"affected": 1, "property": "value", "view_id": view_id}
 
 
@@ -97,10 +99,10 @@ def cmd_clear_cell(
 ) -> dict:
     """Clear a cell value by row/column indices.
 
-    Removes the direct stored value/override. Does NOT delete anchored rules.
-    If a rule covers the address, recalculation may reveal a rule-derived value.
-
-    Maps to engine.clear_cell(view_id, row, col).
+    Macro-language compatibility command.  Removes the direct stored value via
+    the canonical ``engine.clear_cell_hardvalue``.  Does NOT delete anchored
+    rules.  If a rule covers the address, recalculation may reveal a
+    rule-derived value.
     """
     if not view_id:
         raise ValueError("view_id is required")
@@ -109,7 +111,8 @@ def cmd_clear_cell(
     if col < 0:
         raise ValueError("col must be non-negative")
 
-    ctx.engine.clear_cell(view_id, row, col)
+    cell_ref = {"kind": "idx", "row_idx": row, "col_idx": col}
+    ctx.engine.clear_cell_hardvalue(view_id, cell_ref)
     return {"affected": 1, "property": "cleared", "view_id": view_id}
 
 

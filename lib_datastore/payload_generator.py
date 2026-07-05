@@ -102,7 +102,7 @@ class PayloadGenerator:
         cubes = {}
         try:
             for cube_id in engine.list_cubes():
-                cube = engine.get_cube(cube_id)
+                cube = engine.require_cube_by_id(cube_id)
                 if cube:
                     cubes[cube_id] = {
                         "id": cube.id,
@@ -118,7 +118,7 @@ class PayloadGenerator:
         dims = {}
         try:
             for dim_id in engine.list_dimensions():
-                dim = engine.get_dimension(dim_id)
+                dim = engine.require_dimension_by_id(dim_id)
                 if dim:
                     dims[dim_id] = {
                         "id": dim.id,
@@ -139,7 +139,7 @@ class PayloadGenerator:
         views = {}
         try:
             for view_id in engine.list_views():
-                view = engine.get_view(view_id)
+                view = engine.require_view_by_id(view_id)
                 if view:
                     views[view_id] = {
                         "id": view.id,
@@ -161,7 +161,7 @@ class PayloadGenerator:
         cells = {}
         try:
             for cube_id in engine.list_cubes():
-                cube = engine.get_cube(cube_id)
+                cube = engine.require_cube_by_id(cube_id)
                 if not cube:
                     continue
                 
@@ -182,7 +182,7 @@ class PayloadGenerator:
         try:
             count = 0
             for cube_id in engine.list_cubes():
-                cube = engine.get_cube(cube_id)
+                cube = engine.require_cube_by_id(cube_id)
                 if cube:
                     count += len(getattr(cube, "cells", {}))
             return count
@@ -251,7 +251,7 @@ class PayloadRestorer:
         for dim_id, dim_data in dims.items():
             try:
                 # Check if dimension exists
-                existing = engine.get_dimension(dim_id)
+                existing = engine.require_dimension_by_id(dim_id)
                 if not existing:
                     # Create new dimension
                     # Note: This requires Engine API for creating dimensions
@@ -263,7 +263,7 @@ class PayloadRestorer:
         """Restore cubes."""
         for cube_id, cube_data in cubes.items():
             try:
-                existing = engine.get_cube(cube_id)
+                existing = engine.require_cube_by_id(cube_id)
                 if not existing:
                     # Create new cube
                     pass  # TODO: Implement when Engine API available
@@ -274,7 +274,7 @@ class PayloadRestorer:
         """Restore views."""
         for view_id, view_data in views.items():
             try:
-                existing = engine.get_view(view_id)
+                existing = engine.require_view_by_id(view_id)
                 if not existing:
                     # Create new view
                     pass  # TODO: Implement when Engine API available
@@ -291,7 +291,7 @@ class PayloadRestorer:
                     continue
                 
                 cube_id, row_key, col_key = parts
-                cube = engine.get_cube(cube_id)
+                cube = engine.require_cube_by_id(cube_id)
                 if not cube:
                     continue
                 

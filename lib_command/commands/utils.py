@@ -7,6 +7,24 @@ from __future__ import annotations
 from typing import Any, Optional
 
 
+def _find_or_create_default_view(engine, cube_id: str) -> str:
+    """Return a view for the cube, creating a default one if necessary.
+
+    Delegates to the public Engine.find_or_create_default_view method.
+    """
+    return engine.find_or_create_default_view(cube_id)
+
+
+def _semantic_addr_to_cell_ref(engine, cube_id: str, dims: list[str], channel: str = "value") -> tuple[str, dict]:
+    """Convert a semantic address to a canonical (view_id, cell_ref)."""
+    view_id = _find_or_create_default_view(engine, cube_id)
+    view = engine.require_view_by_id(view_id)
+    row_dim_count = len(view.row_dim_ids)
+    row_key = tuple(dims[:row_dim_count])
+    col_key = tuple(dims[row_dim_count:])
+    return view_id, {"kind": "ids", "row_key": row_key, "col_key": col_key, "channel": channel}
+
+
 def _parse_target(target: str) -> tuple[str, Optional[str]]:
     """Parse target string into (type, id).
 

@@ -154,3 +154,86 @@ class _MockSession:
             except Exception:
                 pass
         return None
+
+
+# ---------------------------------------------------------------------------
+# Dimension-aware cell addressing helpers
+# ---------------------------------------------------------------------------
+
+# TRANSITIONAL_TEST_HELPERS:
+# The helpers below adapt legacy positional-tuple test addressing to the
+# public Engine cell_ref API.  They no longer call private or deprecated
+# Engine methods.  Once all tests are migrated to cell_ref_by_dim, these
+# helpers can be deleted.
+
+def _find_default_view_for_cube(engine, cube_id: str) -> str:
+    """Return the first view whose cube_id matches ``cube_id``.
+
+    If no view exists for the cube, create a default view with the first
+    dimension as rows and the remaining dimensions as columns.  This is a
+    transitional convenience for tests that still address cells by positional
+    tuple.
+    """
+    for view in engine.list_views():
+        view_id = getattr(view, "id", view)
+        view_obj = engine.require_view_by_id(view_id)
+        if getattr(view_obj, "cube_id", None) == cube_id:
+            return view_id
+
+    cube = engine.require_cube_by_id(cube_id)
+    dim_ids = [d for d in cube.dimension_ids if d != "@"]
+    if not dim_ids:
+        raise ValueError(f"Cube {cube_id} has no dimensions; cannot create a default view")
+    row_dim_ids = [dim_ids[0]]
+    col_dim_ids = dim_ids[1:]
+    view = engine.create_view(
+        name=f"test_default_view_{cube_id[:8]}",
+        cube_id=cube_id,
+        row_dim_id=row_dim_ids[0] if row_dim_ids else None,
+        col_dim_id=col_dim_ids[0] if col_dim_ids else None,
+        page_dim_ids=col_dim_ids[1:] if len(col_dim_ids) > 1 else [],
+    )
+    return view.id
+
+
+def cell_ref_by_dim(engine, cube_id: str, addr_by_dim_id: dict[str, str]) -> dict:
+    """Build a ``cell_ref`` of kind ``ids`` from a dimension-aware address.
+
+    ``addr_by_dim_id`` maps dimension IDs to item IDs.  The function reads the
+    default view's row/col/page dimensions and builds ``row_key``/``col_key``/
+    ``page_key`` from that mapping.
+    """
+    view_id = _find_default_view_for_cube(engine, cube_id)
+    view = engine.require_view_by_id(view_id)
+
+    row_key = tuple(addr_by_dim_id[dim_id] for dim_id in view.row_dim_ids)
+    col_key = tuple(addr_by_dim_id[dim_id] for dim_id in view.col_dim_ids)
+    page_key = {
+        dim_id: addr_by_dim_id.get(dim_id)
+        for dim_id in getattr(view, "page_dim_ids", [])
+        if dim_id in addr_by_dim_id
+    }
+
+    return {"kind": "ids", "row_key": row_key, "col_key": col_key, "page_key": page_key}
+
+
+def set_cell_by_dim(engine, cube_id: str, addr_by_dim_id: dict[str, str], value):
+    """Set a cell hardvalue using dimension-aware addressing."""
+    view_id = _find_default_view_for_cube(engine, cube_id)
+    cell_ref = cell_ref_by_dim(engine, cube_id, addr_by_dim_id)
+    engine.set_cell_hardvalue(view_id, cell_ref, value)
+
+
+def set_rule_by_dim(engine, cube_id: str, addr_by_dim_id: dict[str, str], expression: str):
+    """Set an anchored rule using dimension-aware addressing."""
+    view_id = _find_default_view_for_cube(engine, cube_id)
+    cell_ref = cell_ref_by_dim(engine, cube_id, addr_by_dim_id)
+    engine.set_rule_anchored(view_id, cell_ref, expression)
+
+
+def get_cell_by_dim(engine, cube_id: str, addr_by_dim_id: dict[str, str]):
+    """Read a cell value using dimension-aware addressing."""
+    view_id = _find_default_view_for_cube(engine, cube_id)
+    cell_ref = cell_ref_by_dim(engine, cube_id, addr_by_dim_id)
+    return engine.get_cell_value(view_id, cell_ref).value
+

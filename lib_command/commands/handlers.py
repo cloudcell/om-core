@@ -108,7 +108,7 @@ def handle_move_nodes(
 def handle_add_aggregate_item(
     cmd: AddAggregateItemCommand, engine: Any, bus: Any, ctx: Any = None
 ) -> _HandlerResult[Any]:
-    result = engine.add_aggregate_item(cmd.dim_id, cmd.group_node_id, cmd.name)
+    result = engine.create_aggregate_item(cmd.dim_id, cmd.group_node_id, cmd.name)
     publish_domain_event(
         bus,
         "event.dimension.structure_changed",

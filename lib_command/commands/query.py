@@ -452,9 +452,15 @@ def cmd_query(
     # ---- Legacy query handlers (deprecated) ----
 
     if type == "current_view":
-        # LEGACY: reads workspace-level saved default, not per-session runtime state.
-        # Runtime callers should use query("active_view_current") instead.
-        view_id = getattr(engine, 'active_view_id', None)
+        # Macro-language compatibility query. Reads per-session runtime state
+        # from SessionStore; canonical callers should use query("active_view_current").
+        session_id = getattr(ctx, "session_id", None)
+        view_id = None
+        if session_id:
+            from lib_command.core.session_store import get_session_store
+            vs = get_session_store().get_view_state(session_id)
+            if vs is not None:
+                view_id = vs.active_view_id
         if view_id and view_id in ws.views:
             view = ws.views[view_id]
             return {

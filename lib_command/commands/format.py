@@ -123,11 +123,8 @@ def _set_format_at_address(engine: Any, address: str, channel: str, value: Any) 
             return False
         cube_id = cube.id
 
-        # Build address tuple with @ channel
-        addr_tuple = (f"@.{channel}",) + tuple(dims)
-
-        # Set the value
-        engine.set_cell_value_by_addr(cube_id, addr_tuple, value)
+        # Set the value via canonical hardvalue API
+        engine.set_cell_hardvalue_by_addr(cube_id, (f"@.{channel}",) + tuple(dims), value)
         return True
 
     except Exception:

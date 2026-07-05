@@ -44,10 +44,8 @@ def cmd_set_active_view(ctx, view_id: str) -> dict:
     """Set the active view for the current session.
 
     Stores the active view in the session store and publishes an
-    ``event.active_view.changed`` domain event.  During the session/
-    view-state refactor transition, also sets ``engine.active_view_id``
-    for backward compatibility with GUI and REPL clients that still
-    read engine state directly.
+    ``event.active_view.changed`` domain event.  Runtime active view is
+    session state, not Engine or Workspace state.
 
     Args:
         ctx: Execution context (provides ``session_id`` and ``engine``).
@@ -60,11 +58,12 @@ def cmd_set_active_view(ctx, view_id: str) -> dict:
     session_id = getattr(ctx, "session_id", None)
     engine = getattr(ctx, "engine", None)
 
-    # Validate view exists
+    # Validate view exists using the canonical Engine API.
     if engine is not None:
-        ws = getattr(engine, "workspace", None)
-        if ws and view_id not in getattr(ws, "views", {}):
-            return {"error": f"View '{view_id}' not found", "success": False}
+        try:
+            engine.require_view_by_id(view_id)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"View '{view_id}' not found: {exc}", "success": False}
 
     if session_id:
         store = _get_session_store()
@@ -73,12 +72,6 @@ def cmd_set_active_view(ctx, view_id: str) -> dict:
             "session_id": session_id,
             "view_id": view_id,
         })
-
-    # Transitional: active_view_id is workspace metadata, not UI state.
-    # Keep engine.workspace.active_view_id in sync so legacy callers and
-    # save/load paths observe the same default.
-    if engine is not None and hasattr(engine, "set_active_view"):
-        engine.set_active_view(view_id)
 
     ctx.status(f"Active view set to {view_id}")
     return {"view_id": view_id, "success": True}
