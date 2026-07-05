@@ -32,7 +32,9 @@ def run_with_splash(
     Args:
         load_path: Optional workspace file to load before opening the window.
     """
-    app.setApplicationName("OM")
+    app.setApplicationName("OM Core")
+    if sys.platform == "darwin":
+        app.setApplicationDisplayName("OM Core")
     _setup_app_palette_and_styles(app)
 
     def update_progress(value: int, message: str) -> None:
@@ -121,8 +123,15 @@ def run_gui_in_thread() -> tuple[threading.Thread, Any, QtWidgets.QApplication, 
     exit_event = threading.Event()
 
     def qt_thread_target():
+        # macOS uses the application name for the menu bar and About menu.
+        # Configure it statically before creating QApplication.
+        QtCore.QCoreApplication.setApplicationName("OM Core")
+        if sys.platform == "darwin":
+            QtGui.QGuiApplication.setApplicationDisplayName("OM Core")
         app = QtWidgets.QApplication([])
-        app.setApplicationName("OM")
+        app.setApplicationName("OM Core")
+        if sys.platform == "darwin":
+            app.setApplicationDisplayName("OM Core")
         app.setStyle("Fusion")
 
         _setup_app_palette_and_styles(app)

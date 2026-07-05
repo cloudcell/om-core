@@ -259,6 +259,12 @@ def _run_gui_only():
     _mark('main() entered')
     from PySide6 import QtWidgets, QtCore, QtGui
     _mark('PySide6 imported')
+    # macOS derives the menu-bar title and About menu from the application name.
+    # Set it statically before QApplication construction so Qt passes it to the
+    # native menu bar instead of the Python process name.
+    QtCore.QCoreApplication.setApplicationName("OM Core")
+    if sys.platform == "darwin":
+        QtGui.QGuiApplication.setApplicationDisplayName("OM Core")
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("OM Core")
     if sys.platform == "darwin":
