@@ -77,11 +77,13 @@ def render_splash(pixmap, progress: int = 0, message: str = "Loading...") -> Non
     painter.setPen(QtGui.QColor(20, 20, 20))
     painter.drawText(QtCore.QRect(40, 265, 400, 20), QtCore.Qt.AlignmentFlag.AlignCenter, f"{progress}%")
 
-    # Version label
+    # Version label (same as Help > About)
+    from lib_utils.version import om_version
+    version = om_version()
     font.setPointSize(11)
     painter.setFont(font)
     painter.setPen(QtGui.QColor(136, 136, 136))
-    painter.drawText(QtCore.QRect(420, 295, 40, 20), QtCore.Qt.AlignmentFlag.AlignRight, "v1.0")
+    painter.drawText(QtCore.QRect(0, 292, 480, 20), QtCore.Qt.AlignmentFlag.AlignCenter, f"Version: {version}")
 
     painter.end()
 
