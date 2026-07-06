@@ -492,6 +492,46 @@ class StatsWorkerThread(QtCore.QThread):
         self.result_ready.emit({"_generation": self._generation, "result": result or {}})
 
 
+class _StatsDropdownButton(QtWidgets.QToolButton):
+    """Status-bar dropdown button that uses a filled downward triangle.
+
+    Mirrors the PageChip arrow style so the selection-stats menu looks like
+    the page-dimension picker chips.
+    """
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setStyleSheet("""
+            _StatsDropdownButton {
+                padding-right: 20px;
+            }
+            _StatsDropdownButton::menu-indicator {
+                image: none;
+                width: 0px;
+                height: 0px;
+            }
+        """)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QtGui.QColor("#1e2d40"))
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        arrow_w = 8.0
+        arrow_h = 5.0
+        margin = 6.0
+        x = self.width() - margin - arrow_w
+        y = (self.height() - arrow_h) / 2.0
+        triangle = QtGui.QPolygonF([
+            QtCore.QPointF(x, y),
+            QtCore.QPointF(x + arrow_w, y),
+            QtCore.QPointF(x + arrow_w / 2.0, y + arrow_h),
+        ])
+        painter.drawPolygon(triangle)
+        painter.end()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     # Signals for thread-safe GUI operations (emitted from any thread, handled on GUI thread)
     open_file_requested = QtCore.Signal(str)
@@ -839,7 +879,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stats_debounce_timer.setSingleShot(True)
         self._stats_debounce_timer.timeout.connect(self._do_update_selection_stats)
 
-        self._selection_stats_button = QtWidgets.QToolButton(self)
+        self._selection_stats_button = _StatsDropdownButton(self)
         self._selection_stats_button.setAutoRaise(True)
         # Use the Qt6 ToolButtonPopupMode enum for instant popup behaviour.
         self._selection_stats_button.setPopupMode(
