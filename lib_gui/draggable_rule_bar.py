@@ -1,10 +1,7 @@
 """Draggable tile-style rule bar with braille drag handle."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6 import QtCore, QtGui, QtWidgets
-from PySide6.QtSvg import QSvgRenderer
 
 
 class RuleSyntaxHighlighter(QtGui.QSyntaxHighlighter):
@@ -460,22 +457,18 @@ class DraggableRuleBar(QtWidgets.QFrame):
         self._rule_input.setEnabled(enabled)
         
     def _load_svg_icon(self, icon_name: str, size: int = 18) -> QtGui.QPixmap:
-        """Load a Tabler SVG icon and render it to a pixmap."""
+        """Load an SVG icon from the zipped icon bundle and render it to a pixmap.
+
+        icon_name is a zip-relative path such as "tabler/icons/outline/trash.svg"
+        or a bare name that the bundle resolver can locate.
+        """
         try:
-            # Use tabler filled icons
-            icon_path = Path(__file__).parent.parent / "assets" / "icons" / "tabler" / "icons" / "filled" / f"{icon_name}.svg"
-            if not icon_path.exists():
-                # Fallback to outline
-                icon_path = Path(__file__).parent.parent / "assets" / "icons" / "tabler" / "icons" / "outline" / f"{icon_name}.svg"
-            if not icon_path.exists():
-                return QtGui.QPixmap()
-            renderer = QSvgRenderer(str(icon_path))
-            pixmap = QtGui.QPixmap(size, size)
-            pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-            painter = QtGui.QPainter(pixmap)
-            painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-            renderer.render(painter)
-            painter.end()
-            return pixmap
+            from lib_gui.icons import load_pixmap
+            from lib_utils.icons import icon_exists
+            # Try filled first, then outline.
+            for style in ("filled", "outline"):
+                if icon_exists(f"tabler/icons/{style}/{icon_name}.svg"):
+                    return load_pixmap(f"tabler/icons/{style}/{icon_name}.svg", size=size)
+            return QtGui.QPixmap()
         except Exception:
             return QtGui.QPixmap()

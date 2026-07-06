@@ -5,47 +5,18 @@ Provides draggable tiles, drop zones, and category panels.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
-from PySide6.QtSvg import QSvgRenderer
+
+from lib_gui.icons import load_icon_colorized
 
 from .models import ButtonDef, CategoryDef
 
 
-# Icon path for Tabler icons
-ICON_PATH = Path(__file__).parent.parent.parent / "assets" / "icons" / "tabler" / "icons" / "outline"
-
-
 def load_svg_icon(icon_name: str, size: int = 16, color: str = "#4B5563") -> QtGui.QIcon:
-    """Load and optionally colorize an SVG icon."""
-    icon_file = ICON_PATH / f"{icon_name}.svg"
-
-    if not icon_file.exists():
-        # Fallback: create colored pixmap
-        pixmap = QtGui.QPixmap(size, size)
-        pixmap.fill(QtGui.QColor(color))
-        return QtGui.QIcon(pixmap)
-
-    renderer = QSvgRenderer(str(icon_file))
-    pixmap = QtGui.QPixmap(size, size)
-    pixmap.fill(QtCore.Qt.GlobalColor.transparent)
-
-    painter = QtGui.QPainter(pixmap)
-    renderer.render(painter)
-    painter.end()
-
-    # Apply color
-    colored = QtGui.QPixmap(size, size)
-    colored.fill(QtCore.Qt.GlobalColor.transparent)
-    painter = QtGui.QPainter(colored)
-    painter.drawPixmap(0, 0, pixmap)
-    painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceIn)
-    painter.fillRect(colored.rect(), QtGui.QColor(color))
-    painter.end()
-
-    return QtGui.QIcon(colored)
+    """Load and colorize an SVG icon from the zipped icon bundle."""
+    return load_icon_colorized(icon_name, size=size, color=color)
 
 
 class DraggableTile(QtWidgets.QPushButton):

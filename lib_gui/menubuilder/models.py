@@ -61,7 +61,7 @@ class ButtonDef:
     """Definition of a toolbar button."""
     id: str                           # Unique button ID
     label: str                        # Display text
-    icon: str                         # Icon name (Tabler icon)
+    icon: str                         # Icon name or zip-relative path
     command: CommandSpec              # Associated command
     category: str                     # Category for grouping
     tooltip: str = ""
@@ -315,7 +315,7 @@ class MenuItemDef:
     location: MenuLocation      # Where this appears
 
     # Visual properties
-    icon: str | None = None     # Icon name (Tabler icon)
+    icon: str | None = None     # Icon name or zip-relative path
     tooltip: str = ""
     shortcut: str | None = None   # Keyboard shortcut
     color: str = "#F3F4F6"      # Background/indicator color

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QPushButton
@@ -44,11 +43,6 @@ SECTION_CONFIGS: List[FormatPillData] = [
 ]
 
 
-def get_icon_path(icon_name: str) -> Path:
-    """Get SVG icon path."""
-    return Path(__file__).parent.parent.parent / "assets" / "icons" / "lucide" / "icons" / f"{icon_name}.svg"
-
-
 class FormatPill(QPushButton):
     """Single format section pill."""
     
@@ -79,17 +73,16 @@ class FormatPill(QPushButton):
         self._update_size()
         
     def _load_icon(self) -> None:
-        """Load and render SVG icon."""
+        """Load and render the lucide SVG icon from the zipped icon bundle."""
         try:
-            icon_path = get_icon_path(self.data.icon_name)
-            if icon_path.exists():
-                renderer = QSvgRenderer(str(icon_path))
-                self._icon_pixmap = QPixmap(self.ICON_SIZE, self.ICON_SIZE)
-                self._icon_pixmap.fill(Qt.GlobalColor.transparent)
-                
-                painter = QPainter(self._icon_pixmap)
-                renderer.render(painter)
-                painter.end()
+            from lib_gui.icons import load_svg_renderer
+            renderer = load_svg_renderer(f"lucide/icons/{self.data.icon_name}")
+            self._icon_pixmap = QPixmap(self.ICON_SIZE, self.ICON_SIZE)
+            self._icon_pixmap.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(self._icon_pixmap)
+            renderer.render(painter)
+            painter.end()
         except Exception as e:
             print(f"Failed to load icon {self.data.icon_name}: {e}")
             

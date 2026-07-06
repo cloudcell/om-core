@@ -1,19 +1,20 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from PySide6 import QtCore, QtWidgets, QtGui
 
+from lib_gui.icons import load_icon
 from lib_gui.workspace_read_model import WorkspaceReadModel
 
 
 def _load_icon(icon_name: str) -> QtGui.QIcon | None:
-    """Load a Tabler SVG icon from the assets directory."""
-    icon_path = Path(__file__).parent.parent / "assets" / "icons" / "tabler" / "icons" / "outline" / icon_name
-    if icon_path.exists():
-        return QtGui.QIcon(str(icon_path))
-    return None
+    """Load an SVG icon from the zipped icon bundle.
+
+    icon_name is a zip-relative path such as "lucide/icons/cube.svg" or a
+    bare name that the bundle resolver can locate.
+    """
+    return load_icon(icon_name)
 
 
 class _ModelBrowserTree(QtWidgets.QTreeWidget):
@@ -493,14 +494,13 @@ class ModelBrowserDock(QtWidgets.QDockWidget):
         for dim in self._workspace_read_model.list_dimension_dtos():
             is_seq = dim.get("dim_type", "set") == "seq"
             label = f"{dim['name']} 🔗" if is_seq else dim["name"]
-            dim_item = QtWidgets.QTreeWidgetItem([label])
+            dim_item = QtWidgets.QTreeWidgetItem(root_dims, [label])
             dim_item.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("dim", dim["id"]))
             if icon_dim:
                 dim_item.setIcon(0, icon_dim)
             for it in dim.get("items", []):
                 item_node = QtWidgets.QTreeWidgetItem(dim_item, [it.get("name", "")])
                 item_node.setData(0, QtCore.Qt.ItemDataRole.UserRole, ("dim_item", dim["id"], it.get("id", "")))
-            root_dims.addChild(dim_item)
 
         # ---- Cubes root and children ----
         root_cubes = QtWidgets.QTreeWidgetItem(["Cubes"])

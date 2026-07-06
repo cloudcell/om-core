@@ -1,22 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
+
+from lib_gui.icons import load_icon
 
 if TYPE_CHECKING:
     from lib_gui.app import MainWindow
 
 
 def _load_icon(icon_name: str, size: int = 20) -> QtGui.QIcon | None:
-    """Load a Tabler SVG icon from the assets directory."""
-    icon_path = Path(__file__).parent.parent / "assets" / "icons" / "tabler" / "icons" / "outline" / icon_name
-    if icon_path.exists():
-        icon = QtGui.QIcon(str(icon_path))
-        return icon
-    return None
+    """Load an SVG icon from the zipped icon bundle.
+
+    icon_name is a zip-relative path such as "tabler/icons/outline/bold.svg"
+    or a bare name that the bundle resolver can locate.
+    """
+    return load_icon(icon_name, size=size)
 
 
 @dataclass

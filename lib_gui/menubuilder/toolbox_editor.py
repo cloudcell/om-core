@@ -659,32 +659,36 @@ class CellFillIconWidget(QtWidgets.QWidget):
         self.setFixedSize(16, 16)
         
     def paintEvent(self, event):
-        from pathlib import Path
-        from PySide6.QtSvg import QSvgRenderer
-        
+        from lib_gui.icons import load_svg_renderer
+
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        
+
         rect = self.rect()
-        
+
         # Draw colored bar at bottom (light gray for default)
         painter.setPen(QtGui.QPen(QtGui.QColor("#e8f0fe"), 2))
         bar_y = rect.bottom() - 2
         painter.drawLine(2, bar_y, rect.width() - 2, bar_y)
-        
-        # Load and draw Lucide paint-bucket icon
-        lucide_path = Path(__file__).parent.parent.parent / "assets" / "icons" / "lucide" / "icons"
-        icon_file = lucide_path / "paint-bucket.svg"
-        if icon_file.exists():
-            renderer = QSvgRenderer(str(icon_file))
-            icon_rect = QtCore.QRect(2, 1, rect.width() - 4, rect.height() // 2 + 1)
-            renderer.render(painter, icon_rect)
-        else:
+
+        # Load and draw Lucide paint-bucket icon from the zipped icon store,
+        # colorized to match the toolbar Cell Fill button.
+        try:
+            renderer = load_svg_renderer("lucide/icons/paint-bucket")
+            pixmap = QtGui.QPixmap(rect.width(), rect.height() // 2 + 2)
+            pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+            icon_painter = QtGui.QPainter(pixmap)
+            renderer.render(icon_painter)
+            icon_painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceIn)
+            icon_painter.fillRect(pixmap.rect(), QtGui.QColor("#5f6368"))
+            icon_painter.end()
+            painter.drawPixmap(0, 1, pixmap)
+        except Exception:
             # Fallback: simple bucket outline
             painter.setPen(QtGui.QPen(QtGui.QColor("#5f6368"), 1))
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             painter.drawRect(4, 3, rect.width() - 8, rect.height() // 2 - 1)
-        
+
         painter.end()
 
 
@@ -1467,15 +1471,26 @@ class PropertiesEditor(QtWidgets.QWidget):
         self._macro_combo.setEnabled(enabled)
         
     def _load_icons(self):
-        """Load all icon names from the outline folder."""
-        from pathlib import Path
-        icon_path = Path(__file__).parent.parent.parent / "assets" / "icons" / "tabler" / "icons" / "outline"
-        if icon_path.exists():
-            self._icon_combo.addItem("(None)", None)
-            icon_files = sorted(icon_path.glob("*.svg"))
-            for icon_file in icon_files:
-                icon_name = icon_file.stem
-                self._icon_combo.addItem(icon_name, icon_name)
+        """Load all tabler outline icon names from the zipped icon bundle.
+
+        Each entry shows a small icon thumbnail next to the name so users can
+        pick without guessing.
+        """
+        from lib_utils.icons import IconStore
+        from lib_gui.icons import load_icon
+
+        store = IconStore()
+        prefix = "tabler/icons/outline/"
+        icon_names = sorted(
+            name[len(prefix):-4]
+            for name in store.list()
+            if name.startswith(prefix) and name.endswith(".svg")
+        )
+        self._icon_combo.addItem("(None)", None)
+        for icon_name in icon_names:
+            icon = load_icon(f"tabler/icons/outline/{icon_name}.svg", size=16)
+            self._icon_combo.addItem(icon, icon_name, icon_name)
+        store.close()
         
     def _update_item(self):
         """Update current item from UI."""

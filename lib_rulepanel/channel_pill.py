@@ -83,14 +83,13 @@ class ChannelPill(QPushButton):
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         
     def load_icon(self):
-        """Load SVG icon and render to pixmap."""
+        """Load SVG icon from the zipped icon bundle and render to pixmap."""
         try:
-            from assets.icons.icon_mapping import get_icon_path
-            icon_path = get_icon_path(self.data.channel_id)
-            self.renderer = QSvgRenderer(str(icon_path))
+            from lib_gui.icons import load_svg_renderer
+            self.renderer = load_svg_renderer(self.data.channel_id)
             self.icon_pixmap = QPixmap(self.ICON_SIZE, self.ICON_SIZE)
             self.icon_pixmap.fill(Qt.GlobalColor.transparent)
-            
+
             painter = QPainter(self.icon_pixmap)
             self.renderer.render(painter)
             painter.end()

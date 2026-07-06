@@ -2,13 +2,11 @@
 Miniature color picker popup widget.
 Inspired by Google Sheets color picker design.
 """
-from pathlib import Path
 from PySide6 import QtWidgets, QtCore, QtGui
 from PySide6.QtSvg import QSvgRenderer
 from typing import Callable, Optional
 
-# Lucide icon path
-LUCIDE_ICON_PATH = Path(__file__).parent.parent / "assets" / "icons" / "lucide" / "icons"
+from lib_gui.icons import load_svg_renderer
 
 
 class MiniColorPicker(QtWidgets.QFrame):
@@ -757,26 +755,31 @@ class MiniCellFillButton(QtWidgets.QPushButton):
         # painter.setPen(QtGui.QPen(QtGui.QColor("#dadce0"), 1))
         # painter.drawLine(main_width, 4, main_width, rect.height() - 4)
 
-        # Load and draw Lucide paint-bucket icon (lower, closer to bar)
-        icon_file = LUCIDE_ICON_PATH / "paint-bucket.svg"
-        if icon_file.exists():
-            renderer = QSvgRenderer(str(icon_file))
-            # Draw icon lower, centered between top and bar - 10% larger
-            icon_height = rect.height() // 2 + 2
-            icon_w = int((main_width - 8) * 1.2)
-            icon_h = int((icon_height - 4) * 1.2)
-            icon_x = 4 - (icon_w - (main_width - 8)) // 2
-            icon_y = 6 - (icon_h - (icon_height - 4)) // 2
-            icon_rect = QtCore.QRect(icon_x, icon_y, icon_w, icon_h)
-            renderer.render(painter, icon_rect)
-        else:
-            # Fallback: draw simple bucket outline
+        # Draw the paint-bucket icon from the zipped icon store, colorized to
+        # match the Toolbox Editor palette icon. We render to a temporary
+        # pixmap and use SourceIn to apply the dark gray color because the
+        # SVG uses currentColor.
+        try:
+            renderer = load_svg_renderer("lucide/icons/paint-bucket")
+            icon_size = 16
+            pixmap = QtGui.QPixmap(icon_size, icon_size)
+            pixmap.fill(QtCore.Qt.GlobalColor.transparent)
+            icon_painter = QtGui.QPainter(pixmap)
+            renderer.render(icon_painter)
+            icon_painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceIn)
+            icon_painter.fillRect(pixmap.rect(), QtGui.QColor("#5f6368"))
+            icon_painter.end()
+            icon_x = 4 + (main_width - 8 - icon_size) // 2
+            icon_y = 3 + (rect.height() - 8 - icon_size) // 2
+            painter.drawPixmap(icon_x, icon_y, pixmap)
+        except Exception:
+            # Fallback: draw a simple bucket outline
             painter.setPen(QtGui.QPen(QtGui.QColor("#5f6368"), 1.5))
             painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-            bucket_top = 8
+            bucket_top = 5
             bucket_bottom = rect.height() // 2 + 1
-            bucket_left = 6
-            bucket_right = main_width - 6
+            bucket_left = 5
+            bucket_right = main_width - 5
             path = QtGui.QPainterPath()
             path.moveTo(bucket_left + 2, bucket_top + 4)
             path.lineTo(bucket_right - 2, bucket_top + 4)
@@ -784,7 +787,12 @@ class MiniCellFillButton(QtWidgets.QPushButton):
             path.lineTo(bucket_left + 4, bucket_bottom - 2)
             path.closeSubpath()
             painter.drawPath(path)
-            painter.drawArc(bucket_left + 4, bucket_top - 2, 8, 6, 0, 180 * 16)
+            painter.drawArc(bucket_left + 3, bucket_top - 1, 10, 6, 0, 180 * 16)
+            painter.setPen(QtGui.QPen(QtGui.QColor("#5f6368"), 1.2))
+            handle_path = QtGui.QPainterPath()
+            handle_path.moveTo(bucket_right - 3, bucket_top + 2)
+            handle_path.quadTo(bucket_right + 2, bucket_top - 1, bucket_right + 1, bucket_top + 4)
+            painter.drawPath(handle_path)
 
         # Draw dropdown triangle
         if self._dropdown_hovered:

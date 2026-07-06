@@ -1,57 +1,75 @@
-"""Icon mappings for Qt integration."""
+"""Icon mappings for Qt integration.
 
-from pathlib import Path
+Icons are stored in the zipped icon bundle at assets/icons/icons.zip.
+CHANNEL_ICONS values are zip-relative paths (e.g. "lucide/icons/grid-3x3.svg")
+so that callers can use either the zip store directly or the Qt helpers in
+lib_gui.icons.
+"""
 
-ICONS_DIR = Path(__file__).parent / "lucide" / "icons"
+from __future__ import annotations
+
+LUCIDE_PREFIX = "lucide/icons"
 
 CHANNEL_ICONS = {
-    "@.value": ICONS_DIR / "grid-3x3.svg",
-    "@.fill": ICONS_DIR / "palette.svg",
-    "@.number_format": ICONS_DIR / "hash.svg",
-    "@.font_family": ICONS_DIR / "type.svg",
-    "@.font_size": ICONS_DIR / "heading-1.svg",
-    "@.font_color": ICONS_DIR / "droplet.svg",
-    "@.font_weight": ICONS_DIR / "bold.svg",
-    "@.font_italic": ICONS_DIR / "italic.svg",
-    "@.border": ICONS_DIR / "square.svg",
-    "@.border_top": ICONS_DIR / "panel-top-open.svg",
-    "@.border_bottom": ICONS_DIR / "panel-bottom-open.svg",
-    "@.border_left": ICONS_DIR / "panel-left-open.svg",
-    "@.border_right": ICONS_DIR / "panel-right-open.svg",
-    "@.alignment": ICONS_DIR / "align-start-horizontal.svg",
-    "@.text_h_align": ICONS_DIR / "align-start-horizontal.svg",
-    "@.text_v_align": ICONS_DIR / "align-start-vertical.svg",
-    "@.text_wrap": ICONS_DIR / "text-wrap.svg",
-    "@.text_indent": ICONS_DIR / "space.svg",
-    "@.text_rotation": ICONS_DIR / "rotate-ccw.svg",
-    "@.validation": ICONS_DIR / "shield-check.svg",
-    "@.protection": ICONS_DIR / "lock.svg",
-    "@.comment": ICONS_DIR / "message-square.svg",
-    "@.style": ICONS_DIR / "palette.svg",
-    "@.format_number": ICONS_DIR / "hash.svg",
-    "@.format_text": ICONS_DIR / "type.svg",
-    "all": ICONS_DIR / "layers.svg",
-    "filter": ICONS_DIR / "funnel.svg",
-    "clear": ICONS_DIR / "x.svg",
-    "search": ICONS_DIR / "search.svg",
-    "edit": ICONS_DIR / "pencil.svg",
-    "delete": ICONS_DIR / "trash-2.svg",
-    "add": ICONS_DIR / "plus.svg",
-    "expand": ICONS_DIR / "chevron-down.svg",
-    "collapse": ICONS_DIR / "chevron-up.svg",
-    "context": ICONS_DIR / "target.svg",
-    "viewport": ICONS_DIR / "eye.svg",
-    "empty": ICONS_DIR / "circle-dashed.svg",
-    "computing": ICONS_DIR / "loader-circle.svg",
-    "new": ICONS_DIR / "sparkles.svg",
-    "readonly": ICONS_DIR / "lock.svg",
-    "inherited": ICONS_DIR / "git-branch.svg",
-    "circle": ICONS_DIR / "circle.svg",
-    "check": ICONS_DIR / "check.svg",
-    "warning": ICONS_DIR / "triangle-alert.svg",
-    "info": ICONS_DIR / "info.svg",
+    "@.value": f"{LUCIDE_PREFIX}/grid-3x3.svg",
+    "@.fill": f"{LUCIDE_PREFIX}/palette.svg",
+    "@.number_format": f"{LUCIDE_PREFIX}/hash.svg",
+    "@.font_family": f"{LUCIDE_PREFIX}/type.svg",
+    "@.font_size": f"{LUCIDE_PREFIX}/heading-1.svg",
+    "@.font_color": f"{LUCIDE_PREFIX}/droplet.svg",
+    "@.font_weight": f"{LUCIDE_PREFIX}/bold.svg",
+    "@.font_italic": f"{LUCIDE_PREFIX}/italic.svg",
+    "@.border": f"{LUCIDE_PREFIX}/square.svg",
+    "@.border_top": f"{LUCIDE_PREFIX}/panel-top-open.svg",
+    "@.border_bottom": f"{LUCIDE_PREFIX}/panel-bottom-open.svg",
+    "@.border_left": f"{LUCIDE_PREFIX}/panel-left-open.svg",
+    "@.border_right": f"{LUCIDE_PREFIX}/panel-right-open.svg",
+    "@.alignment": f"{LUCIDE_PREFIX}/align-start-horizontal.svg",
+    "@.text_h_align": f"{LUCIDE_PREFIX}/align-start-horizontal.svg",
+    "@.text_v_align": f"{LUCIDE_PREFIX}/align-start-vertical.svg",
+    "@.text_wrap": f"{LUCIDE_PREFIX}/text-wrap.svg",
+    "@.text_indent": f"{LUCIDE_PREFIX}/space.svg",
+    "@.text_rotation": f"{LUCIDE_PREFIX}/rotate-ccw.svg",
+    "@.validation": f"{LUCIDE_PREFIX}/shield-check.svg",
+    "@.protection": f"{LUCIDE_PREFIX}/lock.svg",
+    "@.comment": f"{LUCIDE_PREFIX}/message-square.svg",
+    "@.style": f"{LUCIDE_PREFIX}/palette.svg",
+    "@.format_number": f"{LUCIDE_PREFIX}/hash.svg",
+    "@.format_text": f"{LUCIDE_PREFIX}/type.svg",
+    "all": f"{LUCIDE_PREFIX}/layers.svg",
+    "filter": f"{LUCIDE_PREFIX}/funnel.svg",
+    "clear": f"{LUCIDE_PREFIX}/x.svg",
+    "search": f"{LUCIDE_PREFIX}/search.svg",
+    "edit": f"{LUCIDE_PREFIX}/pencil.svg",
+    "delete": f"{LUCIDE_PREFIX}/trash-2.svg",
+    "add": f"{LUCIDE_PREFIX}/plus.svg",
+    "expand": f"{LUCIDE_PREFIX}/chevron-down.svg",
+    "collapse": f"{LUCIDE_PREFIX}/chevron-up.svg",
+    "context": f"{LUCIDE_PREFIX}/target.svg",
+    "viewport": f"{LUCIDE_PREFIX}/eye.svg",
+    "empty": f"{LUCIDE_PREFIX}/circle-dashed.svg",
+    "computing": f"{LUCIDE_PREFIX}/loader-circle.svg",
+    "new": f"{LUCIDE_PREFIX}/sparkles.svg",
+    "readonly": f"{LUCIDE_PREFIX}/lock.svg",
+    "inherited": f"{LUCIDE_PREFIX}/git-branch.svg",
+    "circle": f"{LUCIDE_PREFIX}/circle.svg",
+    "check": f"{LUCIDE_PREFIX}/check.svg",
+    "warning": f"{LUCIDE_PREFIX}/triangle-alert.svg",
+    "info": f"{LUCIDE_PREFIX}/info.svg",
 }
 
-def get_icon_path(channel: str) -> Path:
-    """Get SVG path for a formula channel."""
-    return CHANNEL_ICONS.get(channel, ICONS_DIR / "circle.svg")
+
+def get_icon_path(channel: str) -> str:
+    """Get zip-relative path for a formula channel icon.
+
+    The returned path can be passed to lib_utils.icons.get_icon_by_path or to
+    lib_gui.icons.load_icon.
+    """
+    return CHANNEL_ICONS.get(channel, f"{LUCIDE_PREFIX}/circle.svg")
+
+
+def get_icon_bytes(channel: str) -> bytes | None:
+    """Get raw SVG bytes for a formula channel icon from the zipped bundle."""
+    from lib_utils.icons import get_icon_by_path
+
+    return get_icon_by_path(get_icon_path(channel))
