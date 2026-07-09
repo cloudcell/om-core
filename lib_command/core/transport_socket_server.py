@@ -15,11 +15,12 @@ from .transport_base import TransportEndpoint
 from .transport_serde import encode_envelope, decode_envelope
 from .message_bus import MessageEnvelope
 from .executor import ExecutionContext, ExecutionResult, ExecutionStatus
+from lib_utils.config import gui
 
 logger = logging.getLogger(__name__)
 
 # Cap poll replies so a single event buffer cannot produce a multi-MB message.
-_MAX_EVENTS_PER_POLL = 1000
+_MAX_EVENTS_PER_POLL = 100
 
 
 class SocketTransportServer:
@@ -28,10 +29,10 @@ class SocketTransportServer:
     def __init__(
         self,
         endpoint: TransportEndpoint,
-        timeout: float = 5.0,
+        timeout: Optional[float] = None,
     ) -> None:
         self.endpoint = endpoint
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else gui("transport", "server_timeout_seconds", 5.0)
         self._sock: Optional[socket.socket] = None
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -211,7 +212,6 @@ class SocketTransportServer:
                         break
 
             except socket.timeout:
-                logger.debug("Transport read timeout")
                 continue
             except (ConnectionResetError, BrokenPipeError):
                 break
@@ -338,6 +338,8 @@ class SocketTransportServer:
             if t not in conn_bus_subs:
                 def _make_handler(topic_name: str, queues: dict[str, list] = conn_event_queues):
                     def handler(event: Any) -> None:
+                        if topic_name == "event.profiler.start":
+                            logger.warning("[transport-server] queued profiler start event for client")
                         queues.setdefault(topic_name, []).append(event)
                     return handler
 
@@ -348,12 +350,15 @@ class SocketTransportServer:
         # Collect buffered events, capping per poll to avoid huge replies.
         events: list[dict] = []
         remaining: dict[str, list] = {}
+        profiler_returned = False
         for t in topics:
             queued = conn_event_queues.pop(t, [])
             for event in queued[:_MAX_EVENTS_PER_POLL]:
                 from .transport_serde import envelope_to_wire
                 try:
                     events.append(envelope_to_wire(event))
+                    if t == "event.profiler.start":
+                        profiler_returned = True
                 except Exception:
                     # Skip unserializable events rather than failing the whole poll
                     pass
@@ -362,6 +367,8 @@ class SocketTransportServer:
         if remaining:
             conn_event_queues.update(remaining)
 
+        if profiler_returned:
+            logger.warning("[transport-server] returning profiler start event to client")
         return self._make_reply(
             request,
             "reply.poll_events",

@@ -22,6 +22,14 @@ from .system import (
 )
 from .rule import cmd_rule
 from .query import cmd_query
+from .profiler_register import (
+    cmd_profiler_register,
+    cmd_profiler_unregister,
+    query_profiler_list,
+    resolve_profiler_endpoint,
+)
+from .profile_gui import cmd_profile_gui, clear_pending_profile_requests
+from .profiler_report import cmd_profiler_report
 from .timeline import (
     cmd_checkpoint,
     cmd_restore,
@@ -52,6 +60,14 @@ __all__ = [
     "cmd_rule",
     # Query
     "cmd_query",
+    # Profiler
+    "cmd_profiler_register",
+    "cmd_profiler_unregister",
+    "query_profiler_list",
+    "resolve_profiler_endpoint",
+    "cmd_profile_gui",
+    "clear_pending_profile_requests",
+    "cmd_profiler_report",
     # Timeline
     "cmd_checkpoint",
     "cmd_restore",

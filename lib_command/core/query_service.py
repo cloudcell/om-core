@@ -65,6 +65,8 @@ QUERY_TYPE_TO_TOPIC: dict[str, str] = {
     "udf_detail": "query.udf.detail",
     # Undo domain
     "undo_state": "query.undo.state",
+    # Profiler domain
+    "profiler_list": "query.profiler.list",
     # Diagnostics domain
     "diagnostics_calculation_flow": "query.diagnostics.calculation_flow",
     "diagnostics_circular_references": "query.diagnostics.circular_references",

@@ -15,10 +15,17 @@ Produce TypedDict DTOs from lib_openm.dto.cell — no engine objects cross the b
 
 from __future__ import annotations
 
+import contextlib
+import logging
 import math
+import time
 from typing import Any
 
 from lib_openm.rule_eval.utils import CellError
+
+logger = logging.getLogger(__name__)
+
+DEBUG_ENGINE = False
 
 from lib_openm import config as _om_config
 from lib_openm.dto.cell import (
@@ -41,6 +48,7 @@ from lib_openm.dto.workspace import (
 from lib_openm.model import view_layout_from_legacy
 from lib_command.dto.timeline import TimelineSnapshotDTO
 from .udf_commands import query_udf_list, query_udf_detail
+from .profiler_register import query_profiler_list
 from .grid_helpers import (
     make_viewport_cell_key,
     parse_viewport_cell_key,
@@ -52,7 +60,7 @@ from .grid_helpers import (
 )
 
 
-def cmd_query(
+def _cmd_query(
     ctx,
     type: str,
     **kwargs,
@@ -346,7 +354,13 @@ def cmd_query(
                 "grid_viewport_snapshot query requires view_id, row_keys, col_keys, page_selections"
             )
         return cmd_grid_viewport_snapshot(
-            engine, view_id, row_keys, col_keys, page_selections, channels
+            engine,
+            view_id,
+            row_keys,
+            col_keys,
+            page_selections,
+            channels,
+            profiler=getattr(ctx, "profiler", None),
         )
 
     if type == "selection_stats":
@@ -521,6 +535,9 @@ def cmd_query(
             raise ValueError("udf_detail query requires name parameter")
         return query_udf_detail(ctx, name)
 
+    if type == "profiler_list":
+        return query_profiler_list(ctx)
+
     raise ValueError(
         f"Unknown query type: {type}. "
         "Valid types: current_view, view_list, current_cube, cube_list, "
@@ -534,8 +551,27 @@ def cmd_query(
         "diagnostics_calculation_flow, diagnostics_circular_references, diagnostics_dependency_tracking_state, "
         "diagnostics_dependency_metrics, diagnostics_rule_eval_profile, diagnostics_multithread_config, diagnostics_dirty_count, "
         "grid_viewport_snapshot, cell_channel_values, selection_stats, workspace_rules, "
-        "udf_list, udf_detail"
+        "udf_list, udf_detail, profiler_list"
     )
+
+
+def cmd_query(
+    ctx,
+    type: str,
+    **kwargs,
+) -> dict:
+    """Logged entry point for all runtime queries."""
+    view_id = kwargs.get("view_id")
+    label = view_id[:8] if isinstance(view_id, str) else str(view_id)
+    if DEBUG_ENGINE:
+        print(f"[QUERY-START] {type} view={label}", flush=True)
+    t0 = time.perf_counter()
+    try:
+        return _cmd_query(ctx, type, **kwargs)
+    finally:
+        duration_ms = (time.perf_counter() - t0) * 1000
+        if DEBUG_ENGINE:
+            print(f"[QUERY-DONE] {type} view={label} duration={duration_ms:.1f} ms", flush=True)
 
 
 # =============================================================================
@@ -590,14 +626,18 @@ def cmd_cell_detail(
     col_key: tuple[str, ...],
 ) -> dict:
     """Get single cell as CellDTO (returned as dict for TypedDict clarity)."""
+    # print(f"[CELL-DETAIL-STEP] require_view view={view_id[:8]} row={row_key} col={col_key}", flush=True)
     view = engine.require_view_by_id(view_id)
     cube = engine.require_cube_by_id(view.cube_id)
 
     cell_ref = {"kind": "ids", "row_key": row_key, "col_key": col_key}
+    # print(f"[CELL-DETAIL-STEP] get_cell_value view={view_id[:8]}", flush=True)
     cell = engine.get_cell_value(view_id, cell_ref)
     explain = cell.explain
+    # print(f"[CELL-DETAIL-STEP] addr_for_view_ids view={view_id[:8]}", flush=True)
     addr = engine._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key)
     value = cell.value
+    # print(f"[CELL-DETAIL-STEP] classify value={value!r} source={getattr(explain, 'source', None)!r}", flush=True)
     kind, display_value = _classify_cell_value(value, explain)
 
     explain_dto: dict[str, Any] = {
@@ -1247,6 +1287,7 @@ def cmd_grid_viewport_snapshot(
     col_keys: list[tuple[str, ...]],
     page_selections: dict[str, str],
     channels: list[str] | None,
+    profiler: Any | None = None,
 ) -> dict:
     """Batch query for visible viewport cells, metadata, and channel values.
 
@@ -1254,6 +1295,9 @@ def cmd_grid_viewport_snapshot(
     boundary.  Addresses are resolved deterministically from ``page_selections``
     without consulting hidden GUI/session state.
     """
+    _span = profiler.span if profiler is not None else lambda name, parent=None: contextlib.nullcontext()
+    t0 = time.perf_counter()
+
     view = engine.require_view_by_id(view_id)
     cube = engine.require_cube_by_id(view.cube_id)
 
@@ -1269,66 +1313,127 @@ def cmd_grid_viewport_snapshot(
     for ch in requested_channels:
         channel_values[ch] = {}
 
-    for rk in row_keys:
-        for ck in col_keys:
-            addr = resolve_addr(view, cube, rk, ck, page_selections)
-            visible_addrs.add(addr)
-            key = make_viewport_cell_key(rk, ck)
+    # Resolve addresses first so they are available for both value and channel passes.
+    addr_list: list[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], str]] = []
+    channel_addr_map: dict[str, dict[str, tuple[str, ...]]] = {}
+    if requested_channels:
+        for ch in requested_channels:
+            channel_addr_map[ch] = {}
 
-            # Value (default @.value channel)
-            # Use get_cell_by_addr so lazy rule evaluation is triggered;
-            # cube.get(addr) returns None for cells whose rule has never run.
-            try:
-                value = engine.get_cell_by_addr(cube, addr)
-            except Exception:
-                value = None
-            source = _determine_cell_source(engine, cube, addr)
-            cells[key] = {
-                "value": _coerce_to_primitive(value),
-                "source": source,
-                "cube_id": cube.id,
-                "addr": addr,
-            }
+    cell_count = len(row_keys) * len(col_keys)
+    if DEBUG_ENGINE:
+        print(
+            f"[SNAPSHOT-START] view={view_id[:8] if view_id else None} "
+            f"cells={cell_count} channels={requested_channels}",
+            flush=True,
+        )
+    with _span("grid_viewport_snapshot.compute_cells"):
+        for rk in row_keys:
+            for ck in col_keys:
+                addr = resolve_addr(view, cube, rk, ck, page_selections)
+                visible_addrs.add(addr)
+                key = make_viewport_cell_key(rk, ck)
+                addr_list.append((rk, ck, addr, key))
+
+                for ch in requested_channels:
+                    channel_addr_map[ch][key] = resolve_addr(
+                        view, cube, rk, ck, page_selections, channel=ch
+                    )
+
+        # Fetch values and determine sources.
+        # Disable dependency tracking during this read-only bulk query.  Each
+        # get_cell_by_addr call otherwise re-evaluates cached precedent cells
+        # just to record edges, which makes Period[prev] chains blow up
+        # exponentially when many visible addresses are cold.
+        with engine.dependency_tracking_disabled():
+            for rk, ck, addr, key in addr_list:
+                # Value (default @.value channel)
+                # Use get_cell_by_addr so lazy rule evaluation is triggered;
+                # cube.get(addr) returns None for cells whose rule has never run.
+                cached = cube.get(addr)
+                cell_t0 = time.perf_counter()
+                try:
+                    value = engine.get_cell_by_addr(cube, addr)
+                except Exception:
+                    value = None
+                cell_ms = (time.perf_counter() - cell_t0) * 1000
+                if cell_ms > 100:
+                    logger.info(
+                        "[query] SLOW get_cell_by_addr view=%s addr=%s cell_key=%s "
+                        "cached=%s result=%s duration=%.3f ms",
+                        view_id[:8] if view_id else None,
+                        addr,
+                        key,
+                        cached is not None,
+                        value is not None,
+                        cell_ms,
+                    )
+                source = _determine_cell_source(engine, cube, addr)
+                cells[key] = {
+                    "value": _coerce_to_primitive(value),
+                    "source": source,
+                    "cube_id": cube.id,
+                    "addr": addr,
+                }
 
             # Requested channels
             for ch in requested_channels:
-                ch_addr = resolve_addr(view, cube, rk, ck, page_selections, channel=ch)
-                try:
-                    ch_value = engine.get_cell_by_addr(cube, ch_addr)
-                except Exception:
-                    ch_value = None
-                channel_values[ch][key] = _coerce_to_primitive(ch_value)
+                ch_addr_map = channel_addr_map[ch]
+                for _rk, _ck, _addr, key in addr_list:
+                    ch_addr = ch_addr_map[key]
+                    try:
+                        ch_value = engine.get_cell_by_addr(cube, ch_addr)
+                    except Exception:
+                        ch_value = None
+                    channel_values[ch][key] = _coerce_to_primitive(ch_value)
 
     # Viewport-relevant metadata filtering (F5a non-blocking caution).
     # For correctness, include all; optimisation to filter may follow later.
-    item_formats: dict[str, CellFormatDict] = {}
-    view_item_formats = getattr(view, "item_formats", {}) or {}
-    for fmt_key, fmt in view_item_formats.items():
-        item_formats[fmt_key] = cell_format_to_dict(fmt)
+    with _span("grid_viewport_snapshot.build_response"):
+        item_formats: dict[str, CellFormatDict] = {}
+        view_item_formats = getattr(view, "item_formats", {}) or {}
+        for fmt_key, fmt in view_item_formats.items():
+            item_formats[fmt_key] = cell_format_to_dict(fmt)
 
-    group_formats: dict[str, CellFormatDict] = {}
-    view_group_formats = getattr(view, "group_formats", {}) or {}
-    for grp_key, fmt in view_group_formats.items():
-        group_formats[grp_key] = cell_format_to_dict(fmt)
+        group_formats: dict[str, CellFormatDict] = {}
+        view_group_formats = getattr(view, "group_formats", {}) or {}
+        for grp_key, fmt in view_group_formats.items():
+            group_formats[grp_key] = cell_format_to_dict(fmt)
 
-    # Filter user_override_addrs to visible addresses.
-    visible_override_addrs = [
-        addr for addr in getattr(cube, "user_override_addrs", set())
-        if addr in visible_addrs
-    ]
+        # Filter user_override_addrs to visible addresses.
+        visible_override_addrs = [
+            addr for addr in getattr(cube, "user_override_addrs", set())
+            if addr in visible_addrs
+        ]
 
-    return {
-        "view_id": view_id,
-        "cube_id": cube.id,
-        "row_dim_ids": list(view.row_dim_ids),
-        "col_dim_ids": list(view.col_dim_ids),
-        "page_dim_ids": list(view.page_dim_ids),
-        "item_formats": item_formats,
-        "group_formats": group_formats,
-        "user_override_addrs": visible_override_addrs,
-        "cells": cells,
-        "channels": channel_values,
-    }
+        duration_ms = (time.perf_counter() - t0) * 1000
+        cell_count = len(row_keys) * len(col_keys)
+        if DEBUG_ENGINE:
+            print(
+                f"[SNAPSHOT] view={view_id[:8] if view_id else None} cells={cell_count} "
+                f"channels={requested_channels} duration={duration_ms:.1f} ms",
+                flush=True,
+            )
+        if duration_ms > 50:
+            logger.info(
+                "[query] SLOW grid_viewport_snapshot view=%s cells=%d channels=%r duration=%.3f ms",
+                view_id[:8] if view_id else None,
+                cell_count,
+                requested_channels,
+                duration_ms,
+            )
+        return {
+            "view_id": view_id,
+            "cube_id": cube.id,
+            "row_dim_ids": list(view.row_dim_ids),
+            "col_dim_ids": list(view.col_dim_ids),
+            "page_dim_ids": list(view.page_dim_ids),
+            "item_formats": item_formats,
+            "group_formats": group_formats,
+            "user_override_addrs": visible_override_addrs,
+            "cells": cells,
+            "channels": channel_values,
+        }
 
 
 def cmd_cell_channel_values(

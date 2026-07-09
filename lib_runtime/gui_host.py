@@ -120,6 +120,16 @@ def run_with_splash(
         macro_runner=macro_runner,
     )
 
+    # Wire the GUI profiler into the session context so in-process query
+    # handlers (e.g. grid_viewport_snapshot) can contribute spans to the
+    # GUI profiler report.
+    try:
+        ctx = runtime.command_session.context
+        if ctx is not None:
+            ctx.profiler = win.profiler
+    except Exception:
+        pass
+
     # Load plugins after menus are created inside MainWindow.__init__
     loaded, errors = load_plugins(win, win._plugins_menu)
     if not loaded and win._plugins_menu.isEmpty():
@@ -217,6 +227,15 @@ def run_gui_in_thread() -> tuple[threading.Thread, Any, QtWidgets.QApplication, 
             recorder=recorder,
             macro_runner=macro_runner,
         )
+
+        # Wire the GUI profiler into the session context so in-process query
+        # handlers (e.g. grid_viewport_snapshot) can contribute spans.
+        try:
+            ctx = runtime.command_session.context
+            if ctx is not None:
+                ctx.profiler = win.profiler
+        except Exception:
+            pass
 
         # Load plugins after menus are created inside MainWindow.__init__
         loaded, errors = load_plugins(win, win._plugins_menu)

@@ -12,6 +12,8 @@ from .transport_base import TransportClientProtocol
 
 logger = logging.getLogger(__name__)
 
+DEBUG_SESSION = False
+
 
 class RemoteCommandSession:
     """Mirrors CommandSession but depends only on TransportClientProtocol."""
@@ -47,76 +49,112 @@ class RemoteCommandSession:
 
     def execute(self, command_id: str, **params) -> ExecutionResult:
         """Execute a command through the transport."""
+        logger.info("[GUI-session] execute -> %s params=%r", command_id, {k: v for k, v in params.items() if k != "payload"})
+        t0 = time.perf_counter()
         # Intercept client-side script commands before remote transport
         if command_id == "set_variable":
             name = params.get("name")
             value = params.get("value")
             global_scope = params.get("global_scope", False)
             if not name:
-                return ExecutionResult(
+                result = ExecutionResult(
                     status=ExecutionStatus.ERROR,
                     command_id=command_id,
                     error="set_variable requires a name",
                 )
-            store = self._global_vars if global_scope else self._local_vars
-            store[name] = value
-            return ExecutionResult(
-                status=ExecutionStatus.SUCCESS,
-                command_id=command_id,
-                data={"name": name, "value": value, "global": global_scope},
-            )
-
-        if not self.is_connected:
-            return ExecutionResult(
+            else:
+                store = self._global_vars if global_scope else self._local_vars
+                store[name] = value
+                result = ExecutionResult(
+                    status=ExecutionStatus.SUCCESS,
+                    command_id=command_id,
+                    data={"name": name, "value": value, "global": global_scope},
+                )
+        elif not self.is_connected:
+            result = ExecutionResult(
                 status=ExecutionStatus.ERROR,
                 command_id=command_id,
                 error="Transport disconnected",
             )
-        try:
-            return self.transport_client.send(self.session_id, command_id, **params)
-        except TimeoutError as exc:
-            # A reply timeout is a slow/unresponsive server, not a closed socket.
-            # Keep the socket open so further commands can retry.
+        else:
             try:
-                logger.warning("Transport timeout during execute: %s", exc)
-            except ValueError:
-                pass  # stdout/stderr may be closed during test teardown
-            return ExecutionResult(
-                status=ExecutionStatus.ERROR,
-                command_id=command_id,
-                error=f"Transport reply timeout: {exc}",
-            )
-        except (ConnectionError, OSError) as exc:
-            self._connected = False
-            try:
-                logger.warning("Transport error during execute: %s", exc)
-            except ValueError:
-                pass  # stdout/stderr may be closed during test teardown
-            return ExecutionResult(
-                status=ExecutionStatus.ERROR,
-                command_id=command_id,
-                error=f"Transport disconnected: {exc}",
-            )
+                timeout = None
+                if command_id == "profile_gui":
+                    from lib_command.commands.profile_gui import (
+                        MAX_PROFILE_DURATION_SECONDS,
+                        PROFILE_SHORT_HEADROOM_SECONDS,
+                        PROFILE_LONG_HEADROOM_SECONDS,
+                        PROFILE_LONG_THRESHOLD_SECONDS,
+                    )
+                    duration = float(params.get("duration_seconds", 0))
+                    effective_duration = min(duration, MAX_PROFILE_DURATION_SECONDS)
+                    # Generous headroom: the GUI may be blocked by engine recalculation
+                    # before it can process the profiler event and report back.
+                    headroom = (
+                        PROFILE_LONG_HEADROOM_SECONDS
+                        if effective_duration >= PROFILE_LONG_THRESHOLD_SECONDS
+                        else PROFILE_SHORT_HEADROOM_SECONDS
+                    )
+                    timeout = effective_duration + headroom
+                result = self.transport_client.send(
+                    self.session_id, command_id, timeout=timeout, **params
+                )
+            except TimeoutError as exc:
+                # A reply timeout is a slow/unresponsive server, not a closed socket.
+                # Keep the socket open so further commands can retry.
+                try:
+                    logger.warning("Transport timeout during execute: %s", exc)
+                except ValueError:
+                    pass  # stdout/stderr may be closed during test teardown
+                result = ExecutionResult(
+                    status=ExecutionStatus.ERROR,
+                    command_id=command_id,
+                    error=f"Transport reply timeout: {exc}",
+                )
+            except (ConnectionError, OSError) as exc:
+                self._connected = False
+                try:
+                    logger.warning("Transport error during execute: %s", exc)
+                except ValueError:
+                    pass  # stdout/stderr may be closed during test teardown
+                result = ExecutionResult(
+                    status=ExecutionStatus.ERROR,
+                    command_id=command_id,
+                    error=f"Transport disconnected: {exc}",
+                )
+        logger.info("[GUI-session] execute <- %s status=%s duration=%.3f ms", command_id, result.status, (time.perf_counter() - t0) * 1000)
+        return result
 
     def query(self, query_id: str, **params) -> Any:
         """Execute a query through the transport and return data."""
+        logger.info("[GUI-session] query -> %s", query_id)
+        view_id = params.get("view_id")
+        if DEBUG_SESSION:
+            print(f"[SESSION-QUERY] -> {query_id} view={view_id[:8] if isinstance(view_id, str) else view_id}", flush=True)
+        t0 = time.perf_counter()
         if not self.is_connected:
             return None
         try:
-            return self.transport_client.query(self.session_id, query_id, **params)
+            result = self.transport_client.query(self.session_id, query_id, **params)
+            logger.info("[GUI-session] query <- %s duration=%.3f ms", query_id, (time.perf_counter() - t0) * 1000)
+            return result
         except TimeoutError as exc:
             # A reply timeout is a slow/unresponsive server, not a closed socket.
             try:
-                logger.warning("Transport timeout during query: %s", exc)
+                logger.warning("Transport timeout during query %s: %s", query_id, exc)
             except ValueError:
                 pass  # stdout/stderr may be closed during test teardown
+            if DEBUG_SESSION:
+                print(f"[SESSION-QUERY] TIMEOUT {query_id} view={view_id[:8] if isinstance(view_id, str) else view_id}", flush=True)
             return None
         except (ConnectionError, OSError) as exc:
             self._connected = False
             try:
-                logger.warning("Transport error during query: %s", exc)
+                logger.warning("Transport error during query %s: %s", query_id, exc)
             except ValueError:
                 pass  # stdout/stderr may be closed during test teardown
+            if DEBUG_SESSION:
+                print(f"[SESSION-QUERY] ERROR {query_id} exc={exc}", flush=True)
             return None
 
     def subscribe(self, topic: str, callback: Any) -> None:

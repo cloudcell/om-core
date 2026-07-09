@@ -4,6 +4,8 @@ import logging
 import os
 from PySide6 import QtCore, QtWidgets
 
+logger = logging.getLogger(__name__)
+
 # Debug flag for GUI - set DEBUG_GUI=true to enable verbose logging
 DEBUG_GUI = os.environ.get("DEBUG_GUI", "false").lower() in ("true", "1", "yes")
 
@@ -12,6 +14,7 @@ from lib_gui.cell_read_model import CellReadModel
 from lib_gui.view_workspace import ViewWorkspacePane
 from lib_gui.workspace_read_model import WorkspaceReadModel
 from lib_gui_elements.matrix_grid import MatrixGrid
+from lib_utils.gui_profiler import GuiProfiler, NOOP_SPAN
 
 
 class ViewWorkspaceController(QtCore.QObject):
@@ -37,12 +40,15 @@ class ViewWorkspaceController(QtCore.QObject):
         cell_read_model: CellReadModel,
         workspace_read_model: WorkspaceReadModel,
         parent: QtCore.QObject | None = None,
+        profiler: GuiProfiler | None = None,
     ) -> None:
         super().__init__(parent)
         self._pane = pane
         self._session = session
         self.cell_read_model = cell_read_model
         self.workspace_read_model = workspace_read_model
+        self._profiler = profiler
+        self._span = profiler.span if profiler is not None else NOOP_SPAN
         self._tabs = pane.tabs
         self._rule_panel = pane.rule_panel
         self._flow_panel = pane.flow_panel
@@ -106,6 +112,7 @@ class ViewWorkspaceController(QtCore.QObject):
         self._pane.rule_bar.returnPressed.connect(self._on_rule_bar_enter)
 
     def rebuild_tabs(self) -> None:
+        logger.info("[ViewWorkspaceController] rebuild_tabs active=%s", self._active_view_id[:8] if self._active_view_id else None)
         if self._tabs_signal_connected:
             try:
                 self._tabs.currentChanged.disconnect(self.on_tab_changed)
@@ -182,7 +189,12 @@ class ViewWorkspaceController(QtCore.QObject):
             views = self.workspace_read_model.list_views(include_system=True)
         host = self.parent()
         for view in views:
-            vt = ViewTab(view_id=view["id"], session=self.cell_read_model.session, parent=self._tabs)
+            vt = ViewTab(
+                view_id=view["id"],
+                session=self.cell_read_model.session,
+                parent=self._tabs,
+                profiler=self._profiler,
+            )
             vt.pivot_bar.selection_changed.connect(self.refresh_table)
             vt.page_axis_bar.selection_changed.connect(self.refresh_table)
             if host is not None and hasattr(host, "_on_add_item_to_dim"):
@@ -454,6 +466,7 @@ class ViewWorkspaceController(QtCore.QObject):
         if self._in_tab_change:
             return
         self._in_tab_change = True
+        logger.info("[ViewWorkspaceController] on_tab_changed index=%d view=%s", index, self._view_tabs[index].view_id[:8])
         try:
             vt = self._view_tabs[index]
             if self._active_view_id != vt.view_id:
@@ -462,7 +475,11 @@ class ViewWorkspaceController(QtCore.QObject):
                     raise RuntimeError("Session required for set_active_view")
                 self._session.execute("set_active_view", view_id=vt.view_id)
             # Refresh the view so data mutated while this tab was inactive is visible
-            vt.reload(vt.view_id)
+            if getattr(vt, '_needs_full_reload', False):
+                vt.reload(vt.view_id, invalidate_tiles="all")
+                vt._needs_full_reload = False
+            else:
+                vt.reload(vt.view_id)
             try:
                 view = self.workspace_read_model.get_view(vt.view_id)
                 cube = self.workspace_read_model.get_cube(view.get("cube_id", "")) if view else None
@@ -499,7 +516,12 @@ class ViewWorkspaceController(QtCore.QObject):
         if view is None:
             return
         host = self.parent()
-        vt = ViewTab(view_id=view_id, session=self.cell_read_model.session, parent=self._tabs)
+        vt = ViewTab(
+            view_id=view_id,
+            session=self.cell_read_model.session,
+            parent=self._tabs,
+            profiler=self._profiler,
+        )
         vt.pivot_bar.selection_changed.connect(self.refresh_table)
         vt.page_axis_bar.selection_changed.connect(self.refresh_table)
         if host is not None and hasattr(host, "_on_add_item_to_dim"):
@@ -734,40 +756,48 @@ class ViewWorkspaceController(QtCore.QObject):
             table.viewport().update()
 
     def refresh_table(self) -> None:
-        if not self._view_tabs:
-            return
-        current = self.current_tab
-        current.reload(invalidate_tiles="data")
-        self.table_selection_changed.emit()
-        self.copy_paste_state_changed.emit()
-        self._sync_flow_panel_from_current()
+        with self._span("ViewWorkspaceController.refresh_table"):
+            logger.info("[ViewWorkspaceController] refresh_table active=%s", self._active_view_id[:8] if self._active_view_id else None)
+            if not self._view_tabs:
+                return
+            current = self.current_tab
+            current.reload(invalidate_tiles="data")
+            self.table_selection_changed.emit()
+            self.copy_paste_state_changed.emit()
+            self._sync_flow_panel_from_current()
 
     def refresh_all_views(self) -> None:
-        import time
-        t0 = time.perf_counter()
-        if not self._view_tabs:
-            print(f"[REFRESH] No view tabs, returning immediately")
-            return
+        with self._span("ViewWorkspaceController.refresh_all_views"):
+            import time
+            t0 = time.perf_counter()
+            logger.info("[ViewWorkspaceController] refresh_all_views called tabs=%d", len(self._view_tabs))
+            if not self._view_tabs:
+                DEBUG_GUI and print(f"[REFRESH] No view tabs, returning immediately")
+                return
 
-        print(f"[REFRESH] Starting refresh of {len(self._view_tabs)} view tabs...")
-        for i, vt in enumerate(self._view_tabs):
-            vt_t0 = time.perf_counter()
-            vt.reload(vt.view_id, invalidate_tiles="all")
-            vt_t1 = time.perf_counter()
-            print(f"[REFRESH]   Tab {i+1}/{len(self._view_tabs)} ({vt.view_id}): {(vt_t1-vt_t0)*1000:.1f} ms")
-        
-        t1 = time.perf_counter()
-        print(f"[REFRESH] View reloads complete: {(t1-t0)*1000:.1f} ms")
-        
-        sig_t0 = time.perf_counter()
-        self.table_selection_changed.emit()
-        self.copy_paste_state_changed.emit()
-        self._sync_flow_panel_from_current()
-        sig_t1 = time.perf_counter()
-        print(f"[REFRESH] Signals and sync: {(sig_t1-sig_t0)*1000:.1f} ms")
-        
-        t2 = time.perf_counter()
-        print(f"[REFRESH] TOTAL: {(t2-t0)*1000:.1f} ms")
+            active_idx = self._tabs.currentIndex()
+            DEBUG_GUI and print(f"[REFRESH] Lazy refresh of {len(self._view_tabs)} view tabs; active={active_idx}")
+            for i, vt in enumerate(self._view_tabs):
+                if i == active_idx:
+                    vt_t0 = time.perf_counter()
+                    vt.reload(vt.view_id, invalidate_tiles="all")
+                    vt_t1 = time.perf_counter()
+                    DEBUG_GUI and print(f"[REFRESH]   Active tab {i+1}/{len(self._view_tabs)} ({vt.view_id}): {(vt_t1-vt_t0)*1000:.1f} ms")
+                else:
+                    vt._needs_full_reload = True
+
+            t1 = time.perf_counter()
+            DEBUG_GUI and print(f"[REFRESH] Active tab reloaded; {len(self._view_tabs)-1} deferred: {(t1-t0)*1000:.1f} ms")
+
+            sig_t0 = time.perf_counter()
+            self.table_selection_changed.emit()
+            self.copy_paste_state_changed.emit()
+            self._sync_flow_panel_from_current()
+            sig_t1 = time.perf_counter()
+            DEBUG_GUI and print(f"[REFRESH] Signals and sync: {(sig_t1-sig_t0)*1000:.1f} ms")
+
+            t2 = time.perf_counter()
+            DEBUG_GUI and print(f"[REFRESH] TOTAL: {(t2-t0)*1000:.1f} ms")
 
     def rebuild_rule_panel(self) -> None:
         import time
@@ -779,56 +809,82 @@ class ViewWorkspaceController(QtCore.QObject):
         fp_t0 = time.perf_counter()
         self._rule_panel.rebuild()
         fp_t1 = time.perf_counter()
-        print(f"[REBUILD] Rule panel: {(fp_t1-fp_t0)*1000:.1f} ms")
+        DEBUG_GUI and print(f"[REBUILD] Rule panel: {(fp_t1-fp_t0)*1000:.1f} ms")
         
         if current_tab == 1:  # Calculation Flow tab visible
             flow_t0 = time.perf_counter()
             self._flow_panel.rebuild()
             flow_t1 = time.perf_counter()
-            print(f"[REBUILD] Flow panel: {(flow_t1-flow_t0)*1000:.1f} ms")
+            DEBUG_GUI and print(f"[REBUILD] Flow panel: {(flow_t1-flow_t0)*1000:.1f} ms")
         
         if current_tab == 2:  # Circular References tab visible
             circ_t0 = time.perf_counter()
             self._circular_refs_panel.rebuild()
             circ_t1 = time.perf_counter()
-            print(f"[REBUILD] Circular refs panel: {(circ_t1-circ_t0)*1000:.1f} ms")
+            DEBUG_GUI and print(f"[REBUILD] Circular refs panel: {(circ_t1-circ_t0)*1000:.1f} ms")
         
         t1 = time.perf_counter()
-        print(f"[REBUILD] TOTAL: {(t1-t0)*1000:.1f} ms")
+        DEBUG_GUI and print(f"[REBUILD] TOTAL: {(t1-t0)*1000:.1f} ms")
+
+    def _active_view_layout(self, view_id: str | None) -> dict[str, Any] | None:
+        if view_id is None:
+            return None
+        view = self.workspace_read_model.get_view(view_id)
+        if view is None:
+            return None
+        return {
+            "row_dim_ids": list(view.get("row_dim_ids", []) or []),
+            "col_dim_ids": list(view.get("col_dim_ids", []) or []),
+            "page_dim_ids": list(view.get("page_dim_ids", []) or []),
+        }
 
     def reload_active_view(self) -> None:
-        if getattr(self, '_in_reload_active_view', False):
-            return
-        self._in_reload_active_view = True
-        try:
-            # Skip rebuild if header editor is active, but defer reload for after editor closes
-            table = self.active_table
-            DEBUG_GUI and print(f"DEBUG reload_active_view: table={type(table).__name__ if table else None}")
-            if isinstance(table, MatrixGrid):
-                editor_visible = table._editor.isVisible()
-                has_ctx = table._header_edit_ctx is not None
-                DEBUG_GUI and print(f"DEBUG reload_active_view: editor_visible={editor_visible} has_ctx={has_ctx}")
-                if editor_visible and has_ctx:
-                    DEBUG_GUI and print(f"DEBUG reload_active_view: deferring reload due to active header editor")
-                    # Defer reload until after current event loop iteration
-                    QtCore.QTimer.singleShot(0, self._deferred_reload_active_view)
-                    return
+        import time
+        t0 = time.perf_counter()
+        with self._span("ViewWorkspaceController.reload_active_view"):
+            logger.info("[ViewWorkspaceController] reload_active_view")
+            if getattr(self, '_in_reload_active_view', False):
+                return
+            self._in_reload_active_view = True
+            try:
+                # Skip rebuild if header editor is active, but defer reload for after editor closes
+                table = self.active_table
+                DEBUG_GUI and print(f"DEBUG reload_active_view: table={type(table).__name__ if table else None}")
+                if isinstance(table, MatrixGrid):
+                    editor_visible = table._editor.isVisible()
+                    has_ctx = table._header_edit_ctx is not None
+                    DEBUG_GUI and print(f"DEBUG reload_active_view: editor_visible={editor_visible} has_ctx={has_ctx}")
+                    if editor_visible and has_ctx:
+                        DEBUG_GUI and print(f"DEBUG reload_active_view: deferring reload due to active header editor")
+                        # Defer reload until after current event loop iteration
+                        QtCore.QTimer.singleShot(0, self._deferred_reload_active_view)
+                        return
 
-            # Only rebuild tabs when views have actually changed structurally.
-            # Data-only changes (cell edits) just need a table refresh, not a
-            # full tab rebuild that destroys grids and causes visible flicker.
-            views = self.workspace_read_model.list_views()
-            current_ids = {vt.view_id for vt in self._view_tabs}
-            new_ids = {v.get("id") for v in views if v.get("id")}
-            if current_ids != new_ids or len(self._view_tabs) != len(views):
-                DEBUG_GUI and print(f"DEBUG reload_active_view: view list changed, calling rebuild_tabs")
-                self.rebuild_tabs()
-            else:
-                DEBUG_GUI and print(f"DEBUG reload_active_view: view list unchanged, calling refresh_table")
-                self.refresh_table()
-            self.connect_table_signals()
-        finally:
-            self._in_reload_active_view = False
+                # Only rebuild tabs when views have actually changed structurally.
+                # Data-only changes (cell edits) just need a table refresh, not a
+                # full tab rebuild that destroys grids and causes visible flicker.
+                views = self.workspace_read_model.list_views()
+                current_ids = {vt.view_id for vt in self._view_tabs}
+                new_ids = {v.get("id") for v in views if v.get("id")}
+                if current_ids != new_ids or len(self._view_tabs) != len(views):
+                    DEBUG_GUI and print(f"DEBUG reload_active_view: view list changed, calling rebuild_tabs")
+                    self.rebuild_tabs()
+                else:
+                    current = self.current_tab
+                    current_layout = self._active_view_layout(self._active_view_id)
+                    last_layout = getattr(current, "_last_known_layout", None)
+                    DEBUG_GUI and print(f"[RELOAD] layout check active={self._active_view_id[:8] if self._active_view_id else None} current={current_layout} last={last_layout}")
+                    if current_layout is not None and current_layout == last_layout:
+                        DEBUG_GUI and print(f"[RELOAD] layout unchanged, refreshing table")
+                        self.refresh_table()
+                    else:
+                        DEBUG_GUI and print(f"[RELOAD] layout changed, full rebuild via _rebuild_bars")
+                        current._rebuild_bars()
+                self.connect_table_signals()
+            finally:
+                self._in_reload_active_view = False
+        DEBUG_GUI and print(f"[RELOAD] reload_active_view total: {(time.perf_counter() - t0)*1000:.1f} ms")
+        DEBUG_GUI and print(f"[RELOAD] reload_active_view returning")
 
     def _deferred_reload_active_view(self) -> None:
         """Deferred reload that runs after editor closes."""
@@ -1057,14 +1113,14 @@ class ViewWorkspaceController(QtCore.QObject):
         import re
         # Split only on the first '=' so expressions may contain '=' in IF, etc.
         m = None if text.lstrip().startswith("=") else re.match(r"^=?\s*(.*?)\s*=\s*(.+)$", text)
-        print(f"DEBUG VWCTRL: m={m}, text='{text}'")
+        DEBUG_GUI and print(f"DEBUG VWCTRL: m={m}, text='{text}'")
         if m:
             lhs_raw = m.group(1).strip()
-            print(f"DEBUG VWCTRL: lhs_raw='{lhs_raw}'")
+            DEBUG_GUI and print(f"DEBUG VWCTRL: lhs_raw='{lhs_raw}'")
             if lhs_raw == "*":
                 lhs_raw = "*.*"
             expr = m.group(2).strip()
-            print(f"DEBUG VWCTRL: expr='{expr}', lhs_raw='{lhs_raw}'")
+            DEBUG_GUI and print(f"DEBUG VWCTRL: expr='{expr}', lhs_raw='{lhs_raw}'")
             if lhs_raw:
                 # Slice 3: GUI no longer parses rule targets locally.
                 view = self.workspace_read_model.get_view(self._active_view_id)
@@ -1073,7 +1129,7 @@ class ViewWorkspaceController(QtCore.QObject):
                 cube_id = view.get("cube_id", "")
                 resolve = self.cell_read_model.session.query("rule_target_resolve", cube_id=cube_id, lhs=lhs_raw)
                 if resolve.get("error"):
-                    print(f"DEBUG VWCTRL: rule_target_resolve failed: {resolve['error']}")
+                    DEBUG_GUI and print(f"DEBUG VWCTRL: rule_target_resolve failed: {resolve['error']}")
                     # If the user did not start with '=', they most likely
                     # intended a rule; in that case surface the parse error.
                     if not text.lstrip().startswith("="):
@@ -1082,9 +1138,9 @@ class ViewWorkspaceController(QtCore.QObject):
                     # Otherwise, treat as normal cell entry (fall through below)
                 else:
                     targets = resolve["targets"]
-                    print(f"DEBUG VWCTRL: rule_target_resolve succeeded: {targets}")
+                    DEBUG_GUI and print(f"DEBUG VWCTRL: rule_target_resolve succeeded: {targets}")
                     try:
-                        print(f"DEBUG VWCTRL: calling set_rule command")
+                        DEBUG_GUI and print(f"DEBUG VWCTRL: calling set_rule command")
                         result = self.cell_read_model.session.execute(
                             "set_rule",
                             cube_id=cube_id,
@@ -1094,9 +1150,9 @@ class ViewWorkspaceController(QtCore.QObject):
                         )
                         if result.status.name == "ERROR":
                             raise RuntimeError(result.error or "rule failed")
-                        print(f"DEBUG VWCTRL: rule command succeeded")
+                        DEBUG_GUI and print(f"DEBUG VWCTRL: rule command succeeded")
                     except Exception as e:
-                        print(f"DEBUG VWCTRL: rule command failed: {e}")
+                        DEBUG_GUI and print(f"DEBUG VWCTRL: rule command failed: {e}")
                         QtWidgets.QMessageBox.critical(self._pane, "Rule error", str(e))
                         self._on_rules_changed()
                         return
@@ -1109,12 +1165,12 @@ class ViewWorkspaceController(QtCore.QObject):
                     win = self._pane.window()
                     if hasattr(win, "_mark_dirty"):
                         win._mark_dirty(True)
-                    print(f"DEBUG VWCTRL: returning after rule creation")
+                    DEBUG_GUI and print(f"DEBUG VWCTRL: returning after rule creation")
                     return
             else:
-                print(f"DEBUG VWCTRL: lhs_raw is falsy, skipping rule handling")
+                DEBUG_GUI and print(f"DEBUG VWCTRL: lhs_raw is falsy, skipping rule handling")
         else:
-            print(f"DEBUG VWCTRL: m is None, falling through")
+            DEBUG_GUI and print(f"DEBUG VWCTRL: m is None, falling through")
 
         table = self.active_table
         if table is None:

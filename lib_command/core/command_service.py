@@ -51,10 +51,16 @@ class CommandService:
         self._subscribed = False
 
     def start(self) -> None:
-        """Subscribe to the unified command request topic."""
-        if not self._subscribed:
+        """Subscribe to the unified command request topic.
+
+        If the bus was reset externally (e.g. test fixtures clearing
+        _subscribers), the stored handler may have been dropped. Re-subscribe
+        in that case so commands continue to be processed.
+        """
+        handlers = self.bus._subscribers.get("request.command", [])
+        if self._on_command_request not in handlers:
             self.bus.subscribe("request.command", self._on_command_request)
-            self._subscribed = True
+        self._subscribed = True
 
     def stop(self) -> None:
         """Unsubscribe from the command request topic."""

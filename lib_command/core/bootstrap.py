@@ -17,6 +17,8 @@ from ..commands import (
     cmd_undo, cmd_redo,
     cmd_checkpoint, cmd_restore,
     cmd_rename_checkpoint, cmd_delete_checkpoint,
+    cmd_profiler_register, cmd_profiler_unregister,
+    cmd_profile_gui, cmd_profiler_report,
 )
 from ..commands.model import (
     cmd_clear_dimension_outline,
@@ -1098,6 +1100,47 @@ def register_default_commands(registry: CommandRegistry | None = None) -> Comman
             params={"name": str, "cube_id": str},
         )
 
+    # === Profiler Commands (Phase GUI profiler) ===
+    if not registry.is_registered("register_profiler"):
+        registry.register(
+            "register_profiler",
+            "Register Profiler",
+            CommandCategory.SYSTEM,
+            cmd_profiler_register,
+            description="Register a GUI profiler endpoint ID",
+            params={"endpoint_id": str},
+        )
+
+    if not registry.is_registered("unregister_profiler"):
+        registry.register(
+            "unregister_profiler",
+            "Unregister Profiler",
+            CommandCategory.SYSTEM,
+            cmd_profiler_unregister,
+            description="Unregister a GUI profiler endpoint ID",
+            params={"endpoint_id": str},
+        )
+
+    if not registry.is_registered("profile_gui"):
+        registry.register(
+            "profile_gui",
+            "Profile GUI",
+            CommandCategory.SYSTEM,
+            cmd_profile_gui,
+            description="Request an on-demand profiling session from the GUI",
+            params={"endpoint_id": str, "duration_seconds": float},
+        )
+
+    if not registry.is_registered("profiler_report"):
+        registry.register(
+            "profiler_report",
+            "Profiler Report",
+            CommandCategory.SYSTEM,
+            cmd_profiler_report,
+            description="Receive a profiler report snapshot from the GUI",
+            params={"request_id": str, "snapshot": dict},
+        )
+
     # === Alias lifecycle normalization ===
     executor = get_executor()
     # Executor alias map: only aliases whose lifecycle events should normalize
@@ -1165,10 +1208,14 @@ def init_command_services(
     if _command_service_singleton is not None and _command_service_singleton.bus is not current_bus:
         teardown_command_services()
 
-    # Start CommandService once (idempotent via _subscribed guard)
+    # Create CommandService once, then re-start it so it re-subscribes if the
+    # bus was reset externally.
     if _command_service_singleton is None:
         _command_service_singleton = CommandService(persistence_adapter=persistence_adapter)
-        _command_service_singleton.start()
+
+    # If the bus was reset externally (e.g. test fixtures), the subscription may
+    # have been dropped. Re-starting re-subscribes when needed.
+    _command_service_singleton.start()
 
     return _command_service_singleton
 

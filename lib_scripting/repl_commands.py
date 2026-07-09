@@ -9,6 +9,8 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING
 
+from lib_utils.profiler_report import format_profiler_report
+
 if TYPE_CHECKING:
     from lib_repl.repl_core import OpenMREPLCore
 
@@ -407,6 +409,63 @@ class REPLCommandMixin:
         for d in dims:
             item_count = d.get("items", "?")
             print(f"  {d.get('name', d.get('id', '?'))} ({item_count} items)")
+
+    def do_profilers(self: OpenMREPLCore, arg: str):
+        """List registered GUI profiler endpoints. Usage: profilers"""
+        data = self.session.query("profiler_list")
+        if isinstance(data, list):
+            endpoints = data
+        elif isinstance(data, dict):
+            endpoints = data.get("endpoints", [])
+        else:
+            endpoints = []
+        if not endpoints:
+            print("No GUI profiler endpoints registered")
+            return
+        print(f"Registered GUI profiler endpoints ({len(endpoints)}):")
+        for ep in endpoints:
+            if isinstance(ep, dict):
+                alias = ep.get("alias", "?")
+                endpoint_id = ep.get("endpoint_id", "?")
+                print(f"  {alias}: {endpoint_id}")
+            else:
+                print(f"  {ep}")
+
+    def do_profile(self: OpenMREPLCore, arg: str):
+        """
+        Profile a GUI endpoint for the given duration.
+        Usage: profile gui <endpoint_id_or_alias> <seconds>
+        """
+        args = shlex.split(arg)
+        if len(args) < 3 or args[0] != "gui":
+            print("Usage: profile gui <endpoint_id_or_alias> <seconds>")
+            return
+        endpoint_id = args[1]
+        try:
+            duration_seconds = float(args[2])
+        except ValueError:
+            print("Error: duration must be a number")
+            return
+        if duration_seconds <= 0:
+            print("Error: duration must be positive")
+            return
+
+        result = self.session.execute(
+            "profile_gui", endpoint_id=endpoint_id, duration_seconds=duration_seconds
+        )
+        if result.status.name == "ERROR":
+            print(f"Error: {result.error}")
+            return
+        if not result.data:
+            print("No profile data received")
+            return
+
+        # result.data is either a snapshot dict or an error dict from the runtime command.
+        if isinstance(result.data, dict) and "error" in result.data:
+            print(f"Error: {result.data['error']}")
+            return
+
+        print(format_profiler_report(result.data, title=f"profile {endpoint_id} ({duration_seconds}s)"))
 
     def do_set_dependency_tracking(self: OpenMREPLCore, arg: str):
         """Toggle dependency tracking. Usage: set_dependency_tracking on|off"""

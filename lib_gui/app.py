@@ -6,15 +6,19 @@ import os
 import signal
 import threading
 import time
+import uuid
 import warnings
 from typing import Any
 from PySide6 import QtCore, QtGui, QtWidgets
+
+from lib_utils.gui_profiler import GuiProfiler
 
 from lib_utils.config import gui as gui_config, engine as engine_config, set_gui as gui_config_set
 from lib_utils import gui_constants as _gui_constants
 
 # Debug flag for GUI - can be overridden by environment variable or config
 DEBUG_GUI = os.environ.get("DEBUG_GUI", "").lower() in ("true", "1", "yes") or gui_config("debug", "debug_gui", False)
+logger = logging.getLogger(__name__)
 
 from lib_gui import config as _gui_cfg
 from lib_gui.format_toolbox import FormatToolboxDock
@@ -545,6 +549,7 @@ class MainWindow(QtWidgets.QMainWindow):
     _refresh_gui_requested = QtCore.Signal()          # internal: GUIEventAdapter → refresh_gui
     _set_status_requested = QtCore.Signal(str, str)  # internal: GUIEventAdapter → _set_status_state
     timeline_switch_requested = QtCore.Signal()         # workspace loaded → switch timeline session file
+    _profiler_start_requested = QtCore.Signal(dict)  # internal: queued profiler start from any thread
 
     def __init__(self, progress_callback: Any = None, defer_window_restore: bool = False, session: Any = None, recorder: Any = None, macro_runner: Any = None) -> None:
         super().__init__()
@@ -567,6 +572,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._macro_runner = macro_runner
         from lib_command.core.remote_session import RemoteCommandSession
         self.is_remote = isinstance(self.session, RemoteCommandSession)
+
+        # Phase 2: GUI profiler endpoint for this window.
+        self.profiler = GuiProfiler(endpoint_id=f"gui:{uuid.uuid4()}")
+        self._profiler_start_requested.connect(self._do_profiler_start)
 
         # Remote mode: session has no .context or .gateway.
         # Bus caching removed — read model binder uses GUI-local callback.
@@ -601,6 +610,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._ui_refresh_interval_ms: int = 50
         
         # Domain event subscriptions (work in both local and remote mode)
+        self.session.subscribe("event.profiler.start", self._on_profiler_start)
         self.session.subscribe("event.workspace.dirty_changed", self._on_workspace_dirty_changed)
         self.session.subscribe("event.workspace.loaded", self._on_workspace_loaded_event)
         self.session.subscribe("event.workspace.created", self._on_workspace_loaded_event)
@@ -672,6 +682,7 @@ class MainWindow(QtWidgets.QMainWindow):
             cell_read_model=self.cell_read_model,
             workspace_read_model=self.workspace_read_model,
             parent=self,
+            profiler=self.profiler,
         )
         self._workspace.view_changed.connect(self._on_active_view_changed)
         self._workspace.status_changed.connect(self._set_status_state)
@@ -961,7 +972,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._workspace.initialize()
         self._refresh_error_status(allow_from_computing=True)
         self._update_focus_indicator()
-        
+
+        # Register the GUI profiler endpoint so the TUI can target this window.
+        try:
+            self.session.execute("register_profiler", endpoint_id=self.profiler.endpoint_id)
+        except Exception as exc:
+            logging.warning("Failed to register GUI profiler endpoint: %s", exc)
+
         # Restore window state (geometry, dock positions, visibility)
         self._report_progress(100, "Ready")
         # Defer window state restoration if requested (for splash screen flow)
@@ -1559,6 +1576,32 @@ class MainWindow(QtWidgets.QMainWindow):
             return []
         return [[part.rstrip("\r") for part in row.split("\t")] for row in rows]
 
+    def _matrix_selection_is_rectangular(self) -> bool:
+        """Return True if the visible selection is a single full rectangle.
+
+        This intentionally does NOT query the engine; it is used only to
+        enable/disable menu actions. The expensive value lookups are deferred
+        until the action is actually triggered.
+        """
+        if not isinstance(self._table, MatrixGrid):
+            return False
+        coords = self._table.selected_cell_coords()
+        if not coords:
+            return False
+        rows = [r for r, _ in coords]
+        cols = [c for _, c in coords]
+        top, bottom = min(rows), max(rows)
+        left, right = min(cols), max(cols)
+        expected = (bottom - top + 1) * (right - left + 1)
+        if len(coords) != expected:
+            return False
+        coord_set = set(coords)
+        return all(
+            (r, c) in coord_set
+            for r in range(top, bottom + 1)
+            for c in range(left, right + 1)
+        )
+
     def _matrix_selected_rect_values(self) -> tuple[list[tuple[int, int]], list[list[object]], tuple[int, int, int, int]] | None:
         if not isinstance(self._table, MatrixGrid):
             return None
@@ -1592,6 +1635,45 @@ class MainWindow(QtWidgets.QMainWindow):
                 row_values.append(self.cell_read_model.cell_value(self._active_view_id, row_key, col_key))
             values.append(row_values)
         return coords, values, (top, left, bottom, right)
+
+    def _matrix_selection_is_axis_assignment_eligible(self) -> bool:
+        """Return True if the current selection could be used for axis label assignment.
+
+        This is a cheap, engine-free check used only for enabling/disabling the
+        action. The actual cell reads happen when the action is invoked.
+        """
+        if not isinstance(self._table, MatrixGrid):
+            return False
+        if not self._active_view_id:
+            return False
+        view = self.workspace_read_model.get_view(self._active_view_id)
+        if not view:
+            return False
+        sel_mode = getattr(self._table, "_sel_mode", None)
+        sel_indices = getattr(self._table, "_sel_indices", set())
+        if not isinstance(sel_indices, set):
+            return False
+        if sel_mode == "row":
+            if not view.get("col_dim_ids"):
+                return False
+            ordered_rows = sorted(idx for idx in sel_indices if isinstance(idx, int))
+            if len(ordered_rows) != 1:
+                return False
+            rows = getattr(self._table, "_rows", [])
+            if not (0 <= ordered_rows[0] < len(rows)):
+                return False
+            return bool(rows[ordered_rows[0]].get("is_leaf", False))
+        if sel_mode == "col":
+            if not view.get("row_dim_ids"):
+                return False
+            ordered_cols = sorted(idx for idx in sel_indices if isinstance(idx, int))
+            if len(ordered_cols) != 1:
+                return False
+            cols = getattr(self._table, "_cols", [])
+            if not (0 <= ordered_cols[0] < len(cols)):
+                return False
+            return bool(cols[ordered_cols[0]].get("is_leaf", False))
+        return False
 
     def _matrix_selected_axis_assignment(self) -> tuple[str, str, list[str], list[str]] | None:
         if not isinstance(self._table, MatrixGrid):
@@ -2304,14 +2386,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return f"{err} @ {addr_label}" if addr_label else err
 
         if isinstance(self._table, MatrixGrid):
-            row_keys = list(getattr(self._table, "_row_keys", []))
-            col_keys = list(getattr(self._table, "_col_keys", []))
-            range_dto = self.cell_read_model.get_cell_range(self._active_view_id, row_keys, col_keys)
-            for cell_dto in range_dto.get("cells", []):
-                err_text = self._cell_error_text(cell_dto)
-                if err_text is not None:
-                    addr = cell_dto.get("addr", ())
-                    return _detail_for_addr(addr, err_text)
+            keys = self._table.selected_keys()
+            if keys is None:
+                return None
+            row_key, col_key = keys
+            cell_dto = self.cell_read_model.get_cell(self._active_view_id, row_key, col_key)
+            err_text = self._cell_error_text(cell_dto)
+            if err_text is not None:
+                addr = cell_dto.get("addr", ())
+                return _detail_for_addr(addr, err_text)
             return None
 
         tm = self._current_tab.tree_model
@@ -2522,6 +2605,7 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(bool)
     def _on_recalc_finished(self, success: bool) -> None:
         """Handle successful recalculation completion."""
+        logger.info("[MainWindow] recalc_finished success=%s", success)
         self._thaw_ui_after_calculation()
         if not success:
             return
@@ -2599,6 +2683,7 @@ class MainWindow(QtWidgets.QMainWindow):
         event.accept()
 
     def _on_active_view_changed(self, view_id: str) -> None:
+        logger.info("[MainWindow] active_view_changed view=%s", view_id[:8])
         self._active_view_id = view_id
         self._sync_flow_panel_from_current()
         self._update_selection_stats()
@@ -2737,6 +2822,7 @@ class MainWindow(QtWidgets.QMainWindow):
         reload all views. We instead set a flag and restart a short debounce
         timer; the actual work happens once, when the timer fires.
         """
+        logger.info("[MainWindow] schedule_ui_refresh needs_browser=%s", needs_browser)
         self._ui_refresh_needs_browser |= needs_browser
         if self._ui_refresh_timer is None:
             self._ui_refresh_timer = QtCore.QTimer(self)
@@ -2749,6 +2835,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Perform the coalesced browser rebuild, view refresh, and rule panel rebuild."""
         needs_browser = self._ui_refresh_needs_browser
         self._ui_refresh_needs_browser = False
+        logger.info("[MainWindow] execute_ui_refresh needs_browser=%s", needs_browser)
+        t0 = time.perf_counter()
         if needs_browser:
             try:
                 self._dock_browser.rebuild()
@@ -2772,6 +2860,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 win.controller.rebuild_rule_panel()
             except Exception:
                 pass
+        logger.info("[MainWindow] execute_ui_refresh done duration=%.3f ms", (time.perf_counter() - t0) * 1000)
 
 
     # Phase B.7: GUI event bus subscribers for workspace.* events
@@ -2784,6 +2873,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_workspace_loaded_event(self, event):
         """Handle event.workspace.loaded — emit signal so slot runs on GUI thread."""
+        logger.info("[MainWindow] event workspace.loaded")
         self.timeline_switch_requested.emit()
 
     def _on_checkpoint_created_event(self, event):
@@ -2792,6 +2882,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_checkpoint_restored_event(self, event):
         """Handle event.workspace.checkpoint_restored — emit signals so slots run on GUI thread."""
+        logger.info("[MainWindow] event workspace.checkpoint_restored")
         self.tabs_rebuild_requested.emit()
         self.timeline_switch_requested.emit()
 
@@ -2802,21 +2893,68 @@ class MainWindow(QtWidgets.QMainWindow):
         message = payload.get("message", "")
         self._set_status_state(level, message)
 
+    def _on_profiler_start(self, event: Any) -> None:
+        """Handle event.profiler.start — marshal to GUI thread via signal."""
+        payload = event.payload if hasattr(event, "payload") else event
+        if not isinstance(payload, dict):
+            logging.warning("[profiler] Ignoring non-dict profiler start payload: %r", payload)
+            return
+        logging.warning("[profiler] Received start request for endpoint=%s", payload.get("endpoint_id"))
+        self._profiler_start_requested.emit(payload)
+
+    def _do_profiler_start(self, event: dict) -> None:
+        """Start profiling on the GUI thread, stop after duration, report."""
+        endpoint_id = event.get("endpoint_id")
+        logging.warning("[profiler] GUI start handler endpoint=%s expected=%s", endpoint_id, self.profiler.endpoint_id)
+        if endpoint_id != self.profiler.endpoint_id:
+            return
+        request_id = event.get("request_id")
+        if request_id is None:
+            logging.warning("[profiler] Start request missing request_id")
+            return
+        duration_seconds = event.get("duration_seconds", 0.0)
+        if self.profiler.is_active():
+            logging.warning("[profiler] Restarting profiling for new request (request_id=%s)", request_id)
+            self.profiler.stop_profiling()
+        else:
+            logging.warning("[profiler] Starting profiling for %.2fs (request_id=%s)", duration_seconds, request_id)
+        self.profiler.start_profiling()
+        QtCore.QTimer.singleShot(
+            max(0, int(duration_seconds * 1000)),
+            lambda: self._stop_profiler_and_report(request_id),
+        )
+
+    def _stop_profiler_and_report(self, request_id: str) -> None:
+        """Stop profiling and deliver the snapshot to the waiting command."""
+        logging.warning("[profiler] Stopping profiling and reporting (request_id=%s)", request_id)
+        self.profiler.stop_profiling()
+        snapshot = self.profiler.snapshot()
+        logging.warning("[profiler] Snapshot has %d span(s)", len(snapshot))
+        try:
+            self.session.execute("profiler_report", request_id=request_id, snapshot=snapshot)
+            logging.warning("[profiler] Report delivered")
+        except Exception as exc:
+            logging.warning("[profiler] Failed to deliver profiler report: %s", exc)
+
     def _on_dimension_renamed_event(self, event):
         """Handle event.dimension.renamed — emit signal so slot runs on GUI thread."""
+        logger.info("[MainWindow] event dimension.renamed")
         self.dimension_renamed_requested.emit()
 
     def _on_dimension_item_renamed_event(self, event):
         """Handle event.dimension_item.renamed — emit signal so slot runs on GUI thread."""
+        logger.info("[MainWindow] event dimension_item.renamed")
         self.dimension_item_renamed_requested.emit()
 
     def _on_dimension_structure_changed_event(self, event) -> None:
         """Handle event.dimension.structure_changed — emit signal so slot runs on GUI thread."""
+        logger.info("[MainWindow] event dimension.structure_changed")
         self.model_browser_rebuild_requested.emit()
 
     def _on_view_created_event(self, event):
         """Handle event.view.created — emit signal so slot runs on GUI thread."""
         view_id = event.payload.get("view_id") if hasattr(event, "payload") else None
+        logger.info("[MainWindow] event view.created view=%s", view_id[:8] if view_id else None)
         if view_id:
             self.view_tab_requested.emit(view_id)
             self.model_browser_rebuild_requested.emit()
@@ -3153,8 +3291,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._actions.act_copy.setEnabled(False)
             self._actions.act_paste.setEnabled(False)
             self._actions.act_paste_as_new_cube.setEnabled(bool(QtWidgets.QApplication.clipboard().text()))
-            self._actions.act_convert_selection_to_dimension_labels.setEnabled(self._matrix_selected_rect_values() is not None)
-            self._actions.act_assign_item_labels_from_selection.setEnabled(self._matrix_selected_axis_assignment() is not None)
+            # Use engine-free eligibility checks; the actions themselves read
+            # cells when invoked, but enabling/disabling them must not block the
+            # main thread (especially during slow engine operations).
+            self._actions.act_convert_selection_to_dimension_labels.setEnabled(self._matrix_selection_is_rectangular())
+            self._actions.act_assign_item_labels_from_selection.setEnabled(self._matrix_selection_is_axis_assignment_eligible())
             self._actions.act_delete_selected_dimension_items.setEnabled(self._matrix_selected_dimension_items() is not None)
             return
         sm = self._table.selectionModel()  # type: ignore[union-attr]
@@ -3476,6 +3617,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if getattr(self, '_in_workspace_changed', False):
             return
         self._in_workspace_changed = True
+        logger.info("[MainWindow] workspace_changed start")
+        t0 = time.perf_counter()
         try:
             self._set_status_state("computing", "Computing…")
             self._dock_browser.rebuild()
@@ -3486,6 +3629,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._rule_panel.rebuild()
             self._refresh_error_status(allow_from_computing=True)
         finally:
+            logger.info("[MainWindow] workspace_changed done duration=%.3f ms", (time.perf_counter() - t0) * 1000)
             self._in_workspace_changed = False
 
     def _iter_workspace_controllers(self) -> list[ViewWorkspaceController]:
@@ -3654,24 +3798,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_workspace_data_changed(self) -> None:
         # Skip updates if we're already recalculating (F9 in progress)
         if getattr(self, '_recalculating', False):
+            logger.info("[MainWindow] workspace_data_changed ignored (recalculating)")
             return
+        logger.info("[MainWindow] workspace_data_changed")
         # Defer recalculation to prevent UI freezing during header edits
         # Batch multiple rapid changes into a single recalculation
         if not hasattr(self, '_pending_recalc_timer'):
             self._pending_recalc_timer: Optional[QtCore.QTimer] = None
-        
+
         if self._pending_recalc_timer is not None:
             self._pending_recalc_timer.stop()
         else:
             self._pending_recalc_timer = QtCore.QTimer(self)
             self._pending_recalc_timer.setSingleShot(True)
             self._pending_recalc_timer.timeout.connect(self._do_deferred_recalculation)
-        
+
         # Start timer with 0ms delay - allows UI to process pending events first
         self._pending_recalc_timer.start(0)
-    
+
     def _do_deferred_recalculation(self) -> None:
         """Perform the actual recalculation after deferring."""
+        logger.info("[MainWindow] deferred recalculation start")
+        t0 = time.perf_counter()
         # Skip synchronous full recalculation for normal data changes.
         # Dirty / volatile cells already had their cached values cleared by
         # the engine's _mark_node_and_dependents_dirty.  The upcoming tile
@@ -3729,6 +3877,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._update_selection_stats()
         # Mark as dirty when data changes
         self._mark_dirty(True)
+        logger.info("[MainWindow] deferred recalculation done outline_changed=%s duration=%.3f ms", outline_changed, (time.perf_counter() - t0) * 1000)
 
     @QtCore.Slot()
     def _on_new_workspace(self) -> None:
@@ -7390,6 +7539,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # type: ignore[override]
         """Check for unsaved changes before closing the application."""
+        # Unregister the GUI profiler endpoint so the TUI no longer targets this window.
+        if hasattr(self, 'profiler') and hasattr(self, 'session'):
+            try:
+                self.session.execute("unregister_profiler", endpoint_id=self.profiler.endpoint_id)
+            except Exception as exc:
+                logging.warning("Failed to unregister GUI profiler endpoint: %s", exc)
+
         # Stop all timers to prevent "cannot stop timer from another thread" warnings
         if hasattr(self, '_signal_timer') and self._signal_timer:
             self._signal_timer.stop()

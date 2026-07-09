@@ -78,6 +78,13 @@ class TimelinePanel(QtWidgets.QDockWidget):
         self._refresh_timer = QtCore.QTimer(self)
         self._refresh_timer.timeout.connect(self._poll_datastore)
 
+        # Debounce timer: coalesce rapid reload requests (e.g. event bus
+        # redelivering workspace.loaded during remote startup) into a single
+        # timeline_snapshots query.
+        self._reload_debounce_timer = QtCore.QTimer(self)
+        self._reload_debounce_timer.setSingleShot(True)
+        self._reload_debounce_timer.timeout.connect(self._reload_snapshots)
+
         # Central widget containing the timeline
         self._container = QtWidgets.QWidget()
         self._layout = QtWidgets.QVBoxLayout(self._container)
@@ -255,9 +262,15 @@ class TimelinePanel(QtWidgets.QDockWidget):
         """Reload snapshots from the query spine.
 
         This is a public API for callers such as MainWindow to request a
-        refresh after a workspace switch or checkpoint event.
+        refresh after a workspace switch or checkpoint event. Calls are
+        debounced so a burst of events results in one timeline query.
         """
-        self._reload_snapshots()
+        self._debounced_reload()
+
+    def _debounced_reload(self) -> None:
+        """Schedule a single reload, coalescing rapid repeated calls."""
+        if not self._reload_debounce_timer.isActive():
+            self._reload_debounce_timer.start(100)
 
 
     def _get_main_branch_leaf(self) -> Optional[str]:
@@ -600,7 +613,7 @@ class TimelinePanel(QtWidgets.QDockWidget):
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         """Refresh and start polling when the dock becomes visible."""
         super().showEvent(event)
-        self._reload_snapshots()
+        self._debounced_reload()
         self._start_polling()
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:

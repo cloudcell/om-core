@@ -183,10 +183,12 @@ class MessageBus:
                     callbacks.append(callback)
 
         if not callbacks:
+            if topic == "event.profiler.start":
+                logger.warning("EventBus: publish '%s' has NO matching subscribers", topic)
             return
 
-        if _BUS_CONFIG["debug"]:
-            logger.debug(f"EventBus: publishing to '{topic}' ({len(callbacks)} matching subscribers)")
+        if _BUS_CONFIG["debug"] or topic == "event.profiler.start":
+            logger.warning("EventBus: publishing to '%s' (%d matching subscribers)", topic, len(callbacks))
 
         for callback in callbacks:
             try:

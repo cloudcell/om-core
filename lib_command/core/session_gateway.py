@@ -82,10 +82,33 @@ class SessionGateway:
 
         # Full write path: always route through BusTransport -> request.command -> CommandService
         self._ensure_bus_transport()
+
+        # Long-running commands need a timeout that covers their own duration.
+        timeout: float | None = None
+        if command_id == "profile_gui":
+            duration = float(params.get("duration_seconds", 0))
+            # Cap at the command's own max plus generous headroom for the GUI to
+            # report back (especially with the Julia engine, which may block the
+            # runtime during recalculation before the profiler event is handled).
+            from lib_command.commands.profile_gui import (
+                MAX_PROFILE_DURATION_SECONDS,
+                PROFILE_SHORT_HEADROOM_SECONDS,
+                PROFILE_LONG_HEADROOM_SECONDS,
+                PROFILE_LONG_THRESHOLD_SECONDS,
+            )
+            effective_duration = min(duration, MAX_PROFILE_DURATION_SECONDS)
+            headroom = (
+                PROFILE_LONG_HEADROOM_SECONDS
+                if effective_duration >= PROFILE_LONG_THRESHOLD_SECONDS
+                else PROFILE_SHORT_HEADROOM_SECONDS
+            )
+            timeout = effective_duration + headroom
+
         return self._bus_transport.execute(
             session_id=session_id,
             command_id=command_id,
             context=ctx,
+            timeout=timeout,
             **params
         )
 

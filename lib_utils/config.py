@@ -132,11 +132,44 @@ mouse_scroll_sensitivity = 1.0
 
 [performance]
 # Tile prefetch: max cells per side (1 to 256)
-prefetch_max_tile_size = 5
+prefetch_max_tile_size = 8
 # Pre-render thread pool size (1 to half of CPU cores)
 prerender_thread_pool_size = 8
 # Fetch and render value-only plain tiles first for instant visibility
 prerender_plain_data = false
+
+[profiler]
+# On-demand GUI profiling limits and timeouts
+
+# Maximum profiling duration a user may request via the `profile gui` command.
+max_duration_seconds = 300
+
+# Extra wait time added for short profiles (< long_profile_threshold_seconds)
+# to cover GUI paint/recompute before the profiler report arrives.
+short_headroom_seconds = 15
+
+# Extra wait time added for long profiles (>= long_profile_threshold_seconds);
+# needed when the Julia engine blocks the runtime during recalculation.
+long_headroom_seconds = 60
+
+# Duration threshold that switches from short_headroom_seconds to long_headroom_seconds.
+long_profile_threshold_seconds = 10
+
+[transport]
+# Remote client transport defaults
+
+# Default socket read timeout for the remote client (TUI/GUI) when waiting
+# for a command or query reply from the runtime.
+default_timeout_seconds = 30
+
+# How often the remote client polls the runtime for subscribed bus events.
+poll_interval_seconds = 0.1
+
+# Default timeout for command bus request/reply inside the runtime.
+bus_transport_timeout_seconds = 5
+
+# Server-side per-connection socket read timeout.
+server_timeout_seconds = 5
 
 [debug]
 # Debug flags (can be overridden by environment variables)

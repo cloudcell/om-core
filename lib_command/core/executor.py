@@ -67,6 +67,9 @@ class ExecutionContext:
     # Runtime-wired services (e.g. TimelineService) accessible via ctx.services
     services: Any = None
 
+    # Optional profiler for instrumenting command/query handlers from the GUI.
+    profiler: Any = None
+
     # Command metadata (populated by CommandExecutor during command execution)
     correlation_id: Optional[str] = None
     session_id: Optional[str] = None

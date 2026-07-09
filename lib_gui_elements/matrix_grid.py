@@ -14,11 +14,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 # Debug flag for GUI - set DEBUG_GUI=true to enable verbose logging
 DEBUG_GUI = os.environ.get("DEBUG_GUI", "false").lower() in ("true", "1", "yes")
+logger = logging.getLogger(__name__)
 
 from lib_utils.coerce import coerce_user_value
 from lib_contracts.types import CellFormat, OutlineNode
 from lib_utils.config import gui as gui_config
 from lib_utils.ids import new_id
+from lib_utils.gui_profiler import GuiProfiler, NOOP_SPAN
 from lib_contracts.gui_read_models import CellReadModel, GridReadModel, WorkspaceReadModel
 from .matrix.metrics import GridMetrics
 from .matrix.selection import SelectionManager
@@ -70,6 +72,8 @@ class TileFetchThread(QtCore.QThread):
         data_gen: int = 0,
         plain: bool = False,
         parent: QtCore.QObject | None = None,
+        profiler: GuiProfiler | None = None,
+        parent_span_name: str | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
@@ -80,30 +84,64 @@ class TileFetchThread(QtCore.QThread):
         self._generation = generation
         self._data_gen = data_gen
         self._plain = plain
+        self._profiler = profiler
+        self._parent_span_name = parent_span_name
 
-    def _do_query(self, row_keys: list[tuple[str, ...]], col_keys: list[tuple[str, ...]]) -> dict[str, Any]:
+    def _do_query(
+        self,
+        bounds: tuple[int, int, int, int],
+        row_keys: list[tuple[str, ...]],
+        col_keys: list[tuple[str, ...]],
+    ) -> dict[str, Any]:
         """Blocking query wrapper — runs inside ThreadPoolExecutor."""
-        try:
-            return self._session.query(
-                "grid_viewport_snapshot",
-                view_id=self._view_id,
-                row_keys=row_keys,
-                col_keys=col_keys,
-                page_selections=self._page_selections,
-                channels=self._channels,
+        span = NOOP_SPAN
+        if self._profiler is not None:
+            span = self._profiler.span("TileFetchThread._do_query", parent=self._parent_span_name)
+        with span:
+            cells = len(row_keys) * len(col_keys)
+            DEBUG_GUI and print(
+                f"[TILE-QUERY] start view={self._view_id[:8] if self._view_id else None} "
+                f"bounds={bounds} cells={cells} plain={self._plain}"
             )
-        except Exception as exc:
-            logging.warning("Tile fetch failed: %s", exc)
-            return {}
+            t0 = time.perf_counter()
+            try:
+                result = self._session.query(
+                    "grid_viewport_snapshot",
+                    view_id=self._view_id,
+                    row_keys=row_keys,
+                    col_keys=col_keys,
+                    page_selections=self._page_selections,
+                    channels=self._channels,
+                )
+            except Exception as exc:
+                DEBUG_GUI and print(f"[TILE-QUERY] FAILED view={self._view_id[:8] if self._view_id else None} exc={exc}")
+                return {}
+            duration_ms = (time.perf_counter() - t0) * 1000
+            DEBUG_GUI and print(
+                f"[TILE-QUERY] done view={self._view_id[:8] if self._view_id else None} "
+                f"bounds={bounds} cells={cells} duration={duration_ms:.1f} ms"
+            )
+            return result
 
     def run(self) -> None:
         """Fetch tiles asynchronously using ThreadPoolExecutor so this thread stays responsive."""
+        DEBUG_GUI and print(
+            f"[TILE-THREAD] start view={self._view_id[:8] if self._view_id else None} "
+            f"tiles={len(self._tiles)} plain={self._plain} gen={self._generation} data_gen={self._data_gen}"
+        )
+        t0 = time.perf_counter()
         with ThreadPoolExecutor(max_workers=1) as executor:
             for bounds, row_keys, col_keys in self._tiles:
                 if self.isInterruptionRequested():
                     break
-                # Submit blocking query to executor thread
-                future = executor.submit(self._do_query, row_keys, col_keys)
+                # Submit blocking query to executor thread.  The executor may
+                # already be shutting down if the grid is destroyed while this
+                # thread is running; in that case just stop gracefully.
+                try:
+                    future = executor.submit(self._do_query, bounds, row_keys, col_keys)
+                except RuntimeError:
+                    logger.warning("[TileFetchThread] executor shut down early, aborting view=%s", self._view_id[:8] if self._view_id else None)
+                    break
                 # Poll with timeout so we remain responsive to interruption
                 while not future.done():
                     if self.isInterruptionRequested():
@@ -113,6 +151,14 @@ class TileFetchThread(QtCore.QThread):
                     break
                 snapshot = future.result()
                 self.tile_ready.emit(snapshot or {}, bounds, self._generation, self._plain, self._data_gen)
+                # Yield so the GUI thread and transport command handlers are not
+                # starved while a long background prefetch run is in progress.
+                time.sleep(0)
+        dur = (time.perf_counter() - t0) * 1000
+        DEBUG_GUI and print(
+            f"[TILE-THREAD] finish view={self._view_id[:8] if self._view_id else None} "
+            f"tiles={len(self._tiles)} duration={dur:.1f} ms"
+        )
 
 
 class RendererSignals(QtCore.QObject):
@@ -198,6 +244,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         parent: QtWidgets.QWidget | None = None,
         grid_read_model=None,
         workspace_read_model=None,
+        profiler: GuiProfiler | None = None,
     ) -> None:
         super().__init__(parent)
         if session is None:
@@ -209,6 +256,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         self._grid_read_model = grid_read_model or GridReadModel(session)
         self._workspace_read_model = workspace_read_model or WorkspaceReadModel(session)
         self._cell_read_model = CellReadModel(session)
+        self._profiler = profiler
+        self._span = profiler.span if profiler is not None else NOOP_SPAN
         self._m = GridMetrics()
         
         # Recursion guard to prevent signal storms
@@ -391,6 +440,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         # multiple tile completions into a single repaint to avoid tile-by-tile
         # flicker (especially jarring with volatile functions like RAND()).
         self._viewport_update_timer: QtCore.QTimer | None = None
+        # Coalesce tile_ready signals on the GUI thread so a burst of tiles
+        # does not schedule one QThreadPool runnable at a time.
+        self._tile_ready_batch: list[tuple[dict[str, Any], tuple[int, int, int, int], int, bool, int]] = []
+        self._tile_ready_batch_timer: QtCore.QTimer | None = None
         # F5c: cached view metadata (set during _do_reload, used in paintEvent)
         self._cached_view_meta: dict[str, Any] | None = None
 
@@ -644,6 +697,16 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 page_selections[dim_id] = item_id
         return page_selections
 
+    def _is_thread_alive(self, thread: QtCore.QThread | None) -> bool:
+        """Return True if thread is non-None and its C++ object still exists."""
+        if thread is None:
+            return False
+        try:
+            return thread.isRunning()
+        except RuntimeError:
+            # C++ object has already been deleted; treat as not alive.
+            return False
+
     def _invalidate_snapshot_cache(self) -> None:
         """Invalidate the disposable paint cache (full: plain + formatted)."""
         self._tile_cache.clear()
@@ -654,15 +717,18 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         self._image_data_gens.clear()
         self._pending_cell_values.clear()
         self._pending_tile_fetch = False
-        if self._tile_fetch_thread is not None and self._tile_fetch_thread.isRunning():
+        if self._is_thread_alive(self._tile_fetch_thread):
             self._tile_fetch_thread.requestInterruption()
-        if self._tile_fetch_thread_plain is not None and self._tile_fetch_thread_plain.isRunning():
+        if self._is_thread_alive(self._tile_fetch_thread_plain):
             self._tile_fetch_thread_plain.requestInterruption()
             self._plain_generation += 1
         if self._tile_render_pool is not None:
             self._tile_render_pool.clear()
         if self._tile_debounce_timer is not None:
             self._tile_debounce_timer.stop()
+        if self._tile_ready_batch_timer is not None:
+            self._tile_ready_batch_timer.stop()
+        self._tile_ready_batch.clear()
 
     def _invalidate_tile_images(self) -> None:
         """Invalidate all rendered tile images (used for row-header resize).
@@ -765,7 +831,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
     def _invalidate_formatted_cache(self) -> None:
         """Interrupt the formatted fetch thread only. Caches are preserved for reuse."""
         self._pending_tile_fetch = False
-        if self._tile_fetch_thread is not None and self._tile_fetch_thread.isRunning():
+        if self._is_thread_alive(self._tile_fetch_thread):
             self._tile_fetch_thread.requestInterruption()
 
     def _compute_visible_bounds(self) -> tuple[int, int, int, int]:
@@ -1122,57 +1188,59 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
     def _fetch_visible_cells(self, first_row: int, last_row: int, first_col: int, last_col: int) -> tuple[dict[tuple[int, int], Any], set[tuple[str, ...]], dict[tuple[int, int], str | None], dict[tuple[int, int], str | None]]:
         """Read-only: unpack visible cells from multiple cached tiles."""
-        cells: dict[tuple[int, int], Any] = {}
-        hard_addrs: set[tuple[str, ...]] = set()
-        font_colors: dict[tuple[int, int], str | None] = {}
-        fills: dict[tuple[int, int], str | None] = {}
+        with self._span("MatrixGrid._fetch_visible_cells"):
+            cells: dict[tuple[int, int], Any] = {}
+            hard_addrs: set[tuple[str, ...]] = set()
+            font_colors: dict[tuple[int, int], str | None] = {}
+            fills: dict[tuple[int, int], str | None] = {}
 
-        from lib_utils.viewport_keys import make_viewport_cell_key
-        for tile_bounds, snapshot in self._tile_cache.items():
-            # NEW: skip stale snapshot data
-            if self._formatted_tile_data_gens.get(tile_bounds, -1) != self._data_generation:
-                continue
-            t_first, t_last, t_fc, t_lc = tile_bounds
-            # Skip tiles that don't overlap the visible range
-            if t_last < first_row or t_first > last_row or t_lc < first_col or t_fc > last_col:
-                continue
-            snapshot_cells = snapshot.get("cells", {})
-            snapshot_channels = snapshot.get("channels", {})
-            hard_addrs.update(
-                {tuple(a) if isinstance(a, list) else a for a in snapshot.get("user_override_addrs", [])}
-            )
-            for r in range(max(first_row, t_first), min(last_row, t_last) + 1):
-                try:
-                    row_key = self._row_keys[self._leaf_row_index(r)]
-                except Exception:
+            from lib_utils.viewport_keys import make_viewport_cell_key
+            for tile_bounds, snapshot in self._tile_cache.items():
+                # NEW: skip stale snapshot data
+                if self._formatted_tile_data_gens.get(tile_bounds, -1) != self._data_generation:
                     continue
-                for c in range(max(first_col, t_fc), min(last_col, t_lc) + 1):
+                t_first, t_last, t_fc, t_lc = tile_bounds
+                # Skip tiles that don't overlap the visible range
+                if t_last < first_row or t_first > last_row or t_lc < first_col or t_fc > last_col:
+                    continue
+                snapshot_cells = snapshot.get("cells", {})
+                snapshot_channels = snapshot.get("channels", {})
+                hard_addrs.update(
+                    {tuple(a) if isinstance(a, list) else a for a in snapshot.get("user_override_addrs", [])}
+                )
+                for r in range(max(first_row, t_first), min(last_row, t_last) + 1):
                     try:
-                        col_key = self._col_keys[c]
-                        cell_key = make_viewport_cell_key(row_key, col_key)
-                        cell = snapshot_cells.get(cell_key)
-                        if cell is not None:
-                            cells[(r, c)] = cell
-                        font_colors[(r, c)] = snapshot_channels.get("font_color", {}).get(cell_key)
-                        fills[(r, c)] = snapshot_channels.get("fill", {}).get(cell_key)
+                        row_key = self._row_keys[self._leaf_row_index(r)]
                     except Exception:
-                        pass
+                        continue
+                    for c in range(max(first_col, t_fc), min(last_col, t_lc) + 1):
+                        try:
+                            col_key = self._col_keys[c]
+                            cell_key = make_viewport_cell_key(row_key, col_key)
+                            cell = snapshot_cells.get(cell_key)
+                            if cell is not None:
+                                cells[(r, c)] = cell
+                            font_colors[(r, c)] = snapshot_channels.get("font_color", {}).get(cell_key)
+                            fills[(r, c)] = snapshot_channels.get("fill", {}).get(cell_key)
+                        except Exception:
+                            pass
 
-        # If any visible area is not covered by cached tiles, schedule a fetch
-        covered = False
-        for tile_bounds in self._tile_cache:
-            # NEW: stale tiles don't count as coverage
-            if self._formatted_tile_data_gens.get(tile_bounds, -1) != self._data_generation:
-                continue
-            t_first, t_last, t_fc, t_lc = tile_bounds
-            if (first_row >= t_first and last_row <= t_last and
-                first_col >= t_fc and last_col <= t_lc):
-                covered = True
-                break
-        if not covered:
-            self._schedule_tile_fetch()
+            # If any visible area is not covered by cached tiles, schedule a fetch.
+            # Use the same tile grid as _start_tile_fetch_impl and treat the area as
+            # covered only when every intersecting tile is present and fresh.
+            tile_size = max(10, gui_config("performance", "prefetch_max_tile_size", 10))
+            tile_size = min(tile_size, 256)
+            fresh_bounds = {
+                bounds for bounds in self._tile_cache
+                if self._formatted_tile_data_gens.get(bounds, -1) == self._data_generation
+            }
+            missing_tiles = self._build_tile_list(
+                first_row, last_row, first_col, last_col, tile_size, tile_size, fresh_bounds
+            )
+            if missing_tiles:
+                self._schedule_tile_fetch()
 
-        return cells, hard_addrs, font_colors, fills
+            return cells, hard_addrs, font_colors, fills
 
     def _schedule_tile_fetch(self) -> None:
         """Restart the 50ms debounce timer. Coalesces rapid paint-path requests."""
@@ -1240,6 +1308,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
     def _start_tile_fetch(self) -> None:
         """Start formatted thread immediately (viewport-specific); plain thread is background prefetch."""
+        with self._span("MatrixGrid._start_tile_fetch"):
+            self._start_tile_fetch_impl()
+
+    def _start_tile_fetch_impl(self) -> None:
         self._pending_tile_fetch = False
         if not self._rows or not self._cols or not self._view_id or self._session is None:
             return
@@ -1261,7 +1333,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             self._invalidate_snapshot_cache()
 
         # Formatted thread is viewport-specific: interrupt and restart on every scroll
-        if self._tile_fetch_thread is not None and self._tile_fetch_thread.isRunning():
+        if self._is_thread_alive(self._tile_fetch_thread):
             self._tile_fetch_thread.requestInterruption()
             self._pending_tile_fetch = True
             return
@@ -1269,14 +1341,18 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         first_row, last_row, first_col, last_col = self._compute_visible_bounds()
         visible_rows = max(1, last_row - first_row + 1)
         visible_cols = max(1, last_col - first_col + 1)
-        # Tile size from config (1 to 256)
-        tile_size = gui_config("performance", "prefetch_max_tile_size", 5)
+        # Tile size from config (1 to 256). Very small tiles create a huge number
+        # of per-tile signals and queries that can overwhelm the GUI thread, so
+        # clamp to a sane minimum regardless of the config file.
+        tile_size = max(10, gui_config("performance", "prefetch_max_tile_size", 10))
+        tile_size = min(tile_size, 256)
         tile_h = tile_size
         tile_w = tile_size
 
-        # Plain preload: 4 viewports in each direction (large persistent cache)
-        preload_margin_r = visible_rows * 4
-        preload_margin_c = visible_cols * 4
+        # Plain preload: a quarter viewport in each direction gives enough nearby
+        # data without generating enough background queries to starve the engine/GUI.
+        preload_margin_r = max(1, visible_rows // 4)
+        preload_margin_c = max(1, visible_cols // 4)
         plain_first_r = max(0, first_row - preload_margin_r)
         plain_last_r = min(len(self._rows) - 1, last_row + preload_margin_r)
         plain_first_c = max(0, first_col - preload_margin_c)
@@ -1290,8 +1366,11 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         vc_c = (first_col + last_col) / 2
 
         page_selections = self._build_page_selections()
-        from lib_contracts.types import TECHNICAL_CHANNELS
-        fmt_channels = [ch for ch in TECHNICAL_CHANNELS if ch not in ("value")]
+        # Only fetch the visual channels the formatted renderer actually uses.
+        # The value/source/addr come from the cells dict; view-level formats come
+        # from the workspace read model.  Asking for every technical channel is
+        # expensive and starves the engine with redundant evaluations.
+        fmt_channels = ["fill", "font_color"]
 
         plain_enabled = gui_config("performance", "prerender_plain_data", False)
 
@@ -1312,12 +1391,12 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         # and pop pending cell values, which would leave edited cells blank.
         if getattr(self, '_force_tile_refetch', False):
             self._plain_generation += 1
-            if self._tile_fetch_thread_plain is not None and self._tile_fetch_thread_plain.isRunning():
+            if self._is_thread_alive(self._tile_fetch_thread_plain):
                 self._tile_fetch_thread_plain.requestInterruption()
         gen = self._tile_generation
         DEBUG_GUI and print(
             f"DEBUG _start_tile_fetch: gen={gen} "
-            f"old_thread_running={self._tile_fetch_thread.isRunning() if self._tile_fetch_thread else False} "
+            f"old_thread_running={self._is_thread_alive(self._tile_fetch_thread)} "
             f"pending={self._pending_tile_fetch} "
             f"force_refetch={getattr(self, '_force_tile_refetch', False)}"
         )
@@ -1325,11 +1404,19 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         # --- Plain fetch (value-only, large preload area, background, best-effort) ---
         if plain_enabled:
             # Only start plain thread if not already running; it is a background prefetcher
-            if self._tile_fetch_thread_plain is None or not self._tile_fetch_thread_plain.isRunning():
+            if not self._is_thread_alive(self._tile_fetch_thread_plain):
                 plain_skip = set(self._tile_plain_cache.keys()) | set(self._tile_image_cache.keys())
                 plain_tiles = self._build_tile_list(plain_first_r, plain_last_r, plain_first_c, plain_last_c, tile_h, tile_w, plain_skip)
+                logger.info(
+                    "[MatrixGrid] tile fetch start view=%s plain_tiles=%d visible=(%d-%d,%d-%d) channels=%r",
+                    self._view_id[:8] if self._view_id else None, len(plain_tiles), first_row, last_row, first_col, last_col, fmt_channels,
+                )
                 if plain_tiles:
                     plain_tiles.sort(key=_tile_priority)
+                    DEBUG_GUI and print(
+                        f"[TILE-FETCH] start plain view={self._view_id[:8] if self._view_id else None} "
+                        f"tiles={len(plain_tiles)} visible=({plain_first_r}-{plain_last_r},{plain_first_c}-{plain_last_c})"
+                    )
                     plain_thread = TileFetchThread(
                         session=self._session,
                         view_id=self._view_id,
@@ -1340,6 +1427,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         data_gen=self._data_generation,
                         plain=True,
                         parent=self,
+                        profiler=self._profiler,
+                        parent_span_name=self._profiler.current_span_name() if self._profiler is not None else None,
                     )
                     plain_thread.tile_ready.connect(self._on_tile_ready)
                     self._tile_fetch_thread_plain = plain_thread
@@ -1364,6 +1453,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             DEBUG_GUI and print(f"DEBUG _start_tile_fetch: skip={len(fmt_skip)} tiles")
         fmt_tiles = self._build_tile_list(first_row, last_row, first_col, last_col, tile_h, tile_w, fmt_skip)
         DEBUG_GUI and print(f"DEBUG _start_tile_fetch: fmt_tiles={len(fmt_tiles)}")
+        DEBUG_GUI and print(
+            f"[TILE-FETCH] start formatted view={self._view_id[:8] if self._view_id else None} "
+            f"tiles={len(fmt_tiles)} visible=({first_row}-{last_row},{first_col}-{last_col}) channels={fmt_channels}"
+        )
         if fmt_tiles:
             fmt_tiles.sort(key=_tile_priority)
             fmt_thread = TileFetchThread(
@@ -1376,6 +1469,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 data_gen=self._data_generation,
                 plain=False,
                 parent=self,
+                profiler=self._profiler,
+                parent_span_name=self._profiler.current_span_name() if self._profiler is not None else None,
             )
             fmt_thread.tile_ready.connect(self._on_tile_ready)
             fmt_thread.finished.connect(self._on_tile_thread_finished)
@@ -1402,23 +1497,37 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             self._formatted_tile_data_gens[bounds] = data_gen
             self._tile_image_cache.pop(bounds, None)   # force re-render
             self._image_data_gens.pop(bounds, None)
-            DEBUG_GUI and print(
-                f"DEBUG _on_tile_ready: ACCEPTED fmt bounds={bounds} "
-                f"gen={generation} data_gen={data_gen} cells={len(snapshot.get('cells', {}))}"
+        # Coalesce rapid tile arrivals on the GUI thread and schedule renderers
+        # in one pass rather than one QThreadPool.start() per signal.
+        self._tile_ready_batch.append((snapshot, bounds, generation, is_plain, data_gen))
+        if self._tile_ready_batch_timer is None:
+            self._tile_ready_batch_timer = QtCore.QTimer(self)
+            self._tile_ready_batch_timer.setSingleShot(True)
+            self._tile_ready_batch_timer.timeout.connect(self._flush_tile_ready_batch)
+        self._tile_ready_batch_timer.stop()
+        self._tile_ready_batch_timer.start(0)
+
+    @QtCore.Slot()
+    def _flush_tile_ready_batch(self) -> None:
+        """Schedule renderers for all tiles that arrived since the last flush."""
+        batch = self._tile_ready_batch
+        self._tile_ready_batch = []
+        if not batch:
+            return
+        fmt_count = sum(1 for _, _, _, is_plain, _ in batch if not is_plain)
+        plain_count = len(batch) - fmt_count
+        DEBUG_GUI and print(f"DEBUG _on_tile_ready: flush batch size={len(batch)} fmt={fmt_count} plain={plain_count}")
+        for snapshot, bounds, generation, is_plain, data_gen in batch:
+            renderer = TileRenderer(
+                grid=self,
+                bounds=bounds,
+                snapshot=snapshot,
+                generation=generation,
+                data_gen=data_gen,
+                plain=is_plain,
             )
-        # else: plain tiles do NOT store snapshot; snapshot is passed directly to renderer
-        logging.debug("[tile-fetch] %s (%s-%s, %s-%s)", "plain" if is_plain else "fmt", bounds[0], bounds[1], bounds[2], bounds[3])
-        # Offload QImage rendering to thread pool (up to 16 concurrent)
-        renderer = TileRenderer(
-            grid=self,
-            bounds=bounds,
-            snapshot=snapshot,
-            generation=generation,
-            data_gen=data_gen,
-            plain=is_plain,
-        )
-        renderer.signals.rendered.connect(self._on_tile_rendered)
-        self._tile_render_pool.start(renderer)
+            renderer.signals.rendered.connect(self._on_tile_rendered)
+            self._tile_render_pool.start(renderer)
 
     @QtCore.Slot()
     def _on_tile_rendered(self, bounds: tuple, generation: int, img: object, is_plain: bool = False, data_gen: int = 0) -> None:
@@ -1474,7 +1583,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
     @QtCore.Slot()
     def _on_tile_thread_finished(self) -> None:
         """When formatted thread finishes, restart if a new viewport fetch was queued."""
-        fmt_running = self._tile_fetch_thread is not None and self._tile_fetch_thread.isRunning()
+        fmt_running = self._is_thread_alive(self._tile_fetch_thread)
         if self._pending_tile_fetch and not fmt_running:
             self._start_tile_fetch()
 
@@ -1494,165 +1603,173 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         img.fill(QtGui.QColor("white"))
         p = QtGui.QPainter(img)
         p.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
+        try:
+            snapshot_cells = snapshot.get("cells", {})
+            snapshot_channels = snapshot.get("channels", {})
+            if not isinstance(snapshot_cells, dict):
+                print(f"[RENDER] cells is not a dict ({type(snapshot_cells).__name__}), treating as empty")
+                snapshot_cells = {}
+            if not isinstance(snapshot_channels, dict):
+                print(f"[RENDER] channels is not a dict ({type(snapshot_channels).__name__}), treating as empty")
+                snapshot_channels = {}
+            hard_addrs = {tuple(a) if isinstance(a, list) else a for a in snapshot.get("user_override_addrs", [])}
+            from lib_utils.viewport_keys import make_viewport_cell_key
+            from lib_contracts.types import get_value_type
 
-        snapshot_cells = snapshot.get("cells", {})
-        snapshot_channels = snapshot.get("channels", {})
-        hard_addrs = {tuple(a) if isinstance(a, list) else a for a in snapshot.get("user_override_addrs", [])}
-        from lib_utils.viewport_keys import make_viewport_cell_key
-        from lib_contracts.types import get_value_type
+            custom_borders: list[tuple[QtCore.QRect, CellFormat]] = []
 
-        custom_borders: list[tuple[QtCore.QRect, CellFormat]] = []
-
-        y = 0
-        for r_i in range(first_row, last_row + 1):
-            if r_i >= len(self._rows):
-                y += self._m.row_h
-                continue
-            row = self._rows[r_i]
-            if not row.get("is_leaf", False):
-                y += self._m.row_h
-                continue
-
-            x = 0
-            for c in range(first_col, last_col + 1):
-                col_w = self._col_width(c)
-                cell_r = QtCore.QRect(x, y, col_w, self._m.row_h)
-
-                # Resolve cell key
-                try:
-                    row_key = self._row_keys[self._leaf_row_index(r_i)]
-                    col_key = self._col_keys[c]
-                    cell_key = make_viewport_cell_key(row_key, col_key)
-                except Exception:
-                    x += col_w
+            y = 0
+            for r_i in range(first_row, last_row + 1):
+                if r_i >= len(self._rows):
+                    y += self._m.row_h
+                    continue
+                row = self._rows[r_i]
+                if not row.get("is_leaf", False):
+                    y += self._m.row_h
                     continue
 
-                if plain:
-                    # Plain: white background, gridline, simple text
-                    p.fillRect(cell_r, QtGui.QColor("white"))
+                x = 0
+                for c in range(first_col, last_col + 1):
+                    col_w = self._col_width(c)
+                    cell_r = QtCore.QRect(x, y, col_w, self._m.row_h)
+
+                    # Resolve cell key
+                    try:
+                        row_key = self._row_keys[self._leaf_row_index(r_i)]
+                        col_key = self._col_keys[c]
+                        cell_key = make_viewport_cell_key(row_key, col_key)
+                    except Exception:
+                        x += col_w
+                        continue
+
+                    if plain:
+                        # Plain: white background, gridline, simple text
+                        p.fillRect(cell_r, QtGui.QColor("white"))
+                        p.setPen(self._m.gridline)
+                        p.drawRect(cell_r)
+
+                        cell = snapshot_cells.get(cell_key)
+                        if cell is not None:
+                            cell_value = cell.get("value")
+                            p.setPen(QtGui.QColor("#202020"))
+                            default_font = QtGui.QFont("sans-serif", 9)
+                            p.setFont(default_font)
+                            v = "" if cell_value is None else str(cell_value)
+                            align = self._get_text_alignment("left", "center")
+                            p.drawText(cell_r.adjusted(4, 0, -4, 0), align, v)
+
+                        x += col_w
+                        continue
+
+                    # --- Formatted path below ---
+                    # Format
+                    try:
+                        fmt = self._get_cell_format(r_i, c)
+                    except Exception:
+                        fmt = CellFormat()
+
+                    # Background
+                    engine_fill = snapshot_channels.get("fill", {}).get(cell_key)
+                    bg_color = engine_fill if engine_fill else (fmt.bg_color if fmt.bg_color else "white")
+                    try:
+                        if isinstance(bg_color, str) and bg_color.startswith("#") and len(bg_color) in (4, 7, 9):
+                            color = QtGui.QColor(bg_color)
+                        elif isinstance(bg_color, str):
+                            color = QtGui.QColor(bg_color)
+                        else:
+                            color = QtGui.QColor("white")
+                    except Exception:
+                        color = QtGui.QColor("white")
+                    p.fillRect(cell_r, color)
+
+                    # Gridline
                     p.setPen(self._m.gridline)
                     p.drawRect(cell_r)
 
+                    # Cell data
                     cell = snapshot_cells.get(cell_key)
-                    if cell is not None:
-                        cell_value = cell.get("value")
-                        p.setPen(QtGui.QColor("#202020"))
-                        default_font = QtGui.QFont("sans-serif", 9)
-                        p.setFont(default_font)
+                    if cell is None:
+                        x += col_w
+                        continue
+
+                    cell_addr = cell.get("addr")
+                    if isinstance(cell_addr, list):
+                        cell_addr = tuple(cell_addr)
+                    is_hardnumber = cell_addr in hard_addrs if cell_addr else False
+                    cell_value = cell.get("value")
+                    cell_source = cell.get("source")
+                    is_hard_value = is_hardnumber or (cell_source == "override" and cell_value is not None)
+
+                    if is_hard_value:
+                        p.fillRect(cell_r.adjusted(1, 1, 0, 0), QtGui.QColor("#ffff99"))
+                        # Red triangle
+                        ts = 6
+                        tri = QtGui.QPolygon([
+                            QtCore.QPoint(cell_r.right() - ts + 1, cell_r.top() + 1),
+                            QtCore.QPoint(cell_r.right() + 1, cell_r.top() + 1),
+                            QtCore.QPoint(cell_r.right() + 1, cell_r.top() + ts + 1),
+                        ])
+                        p.setBrush(QtGui.QColor("#ff0000"))
+                        p.setPen(QtCore.Qt.PenStyle.NoPen)
+                        p.drawPolygon(tri)
+                        p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+
+                    # Text
+                    engine_font_color = snapshot_channels.get("font_color", {}).get(cell_key)
+                    effective_bg = engine_fill or fmt.bg_color or "white"
+                    text_pen = QtGui.QColor(
+                        engine_font_color if engine_font_color else get_contrast_font_color(effective_bg)
+                    )
+                    p.setPen(text_pen)
+
+                    value_type = get_value_type(cell_value)
+                    try:
+                        if value_type == "null":
+                            v = self._format_null(fmt.format_null)
+                        elif value_type == "error":
+                            v = str(cell_value) if not fmt.format_error else f"[{cell_value}]"
+                        elif value_type == "numeric":
+                            v = "" if cell_value is None else str(cell_value)
+                            v = self._format_value(v, fmt.format_number)
+                        else:
+                            v = "" if cell_value is None else str(cell_value)
+                            v = self._format_text(v, fmt.format_text)
+                    except Exception:
                         v = "" if cell_value is None else str(cell_value)
-                        align = self._get_text_alignment("left", "center")
-                        p.drawText(cell_r.adjusted(4, 0, -4, 0), align, v)
+
+                    font = QtGui.QFont(
+                        fmt.font_family if fmt.font_family else "sans-serif",
+                        fmt.font_size if fmt.font_size else 9,
+                    )
+                    font.setWeight(QtGui.QFont.Weight(fmt.font_weight))
+                    font.setItalic(fmt.font_italic)
+                    p.setFont(font)
+
+                    h_align = fmt.text_h_align
+                    if h_align == "left" and value_type == "numeric":
+                        h_align = "right"
+                    align = self._get_text_alignment(h_align, fmt.text_v_align)
+                    p.drawText(cell_r.adjusted(4, 0, -4, 0), align, v)
+
+                    if (
+                        fmt.border_top != "none"
+                        or fmt.border_bottom != "none"
+                        or fmt.border_left != "none"
+                        or fmt.border_right != "none"
+                    ):
+                        custom_borders.append((QtCore.QRect(cell_r), fmt))
 
                     x += col_w
-                    continue
+                y += self._m.row_h
 
-                # --- Formatted path below ---
-                # Format
-                try:
-                    fmt = self._get_cell_format(r_i, c)
-                except Exception:
-                    fmt = CellFormat()
-
-                # Background
-                engine_fill = snapshot_channels.get("fill", {}).get(cell_key)
-                bg_color = engine_fill if engine_fill else (fmt.bg_color if fmt.bg_color else "white")
-                try:
-                    if isinstance(bg_color, str) and bg_color.startswith("#") and len(bg_color) in (4, 7, 9):
-                        color = QtGui.QColor(bg_color)
-                    elif isinstance(bg_color, str):
-                        color = QtGui.QColor(bg_color)
-                    else:
-                        color = QtGui.QColor("white")
-                except Exception:
-                    color = QtGui.QColor("white")
-                p.fillRect(cell_r, color)
-
-                # Gridline
-                p.setPen(self._m.gridline)
-                p.drawRect(cell_r)
-
-                # Cell data
-                cell = snapshot_cells.get(cell_key)
-                if cell is None:
-                    x += col_w
-                    continue
-
-                cell_addr = cell.get("addr")
-                if isinstance(cell_addr, list):
-                    cell_addr = tuple(cell_addr)
-                is_hardnumber = cell_addr in hard_addrs if cell_addr else False
-                cell_value = cell.get("value")
-                cell_source = cell.get("source")
-                is_hard_value = is_hardnumber or (cell_source == "override" and cell_value is not None)
-
-                if is_hard_value:
-                    p.fillRect(cell_r.adjusted(1, 1, 0, 0), QtGui.QColor("#ffff99"))
-                    # Red triangle
-                    ts = 6
-                    tri = QtGui.QPolygon([
-                        QtCore.QPoint(cell_r.right() - ts + 1, cell_r.top() + 1),
-                        QtCore.QPoint(cell_r.right() + 1, cell_r.top() + 1),
-                        QtCore.QPoint(cell_r.right() + 1, cell_r.top() + ts + 1),
-                    ])
-                    p.setBrush(QtGui.QColor("#ff0000"))
-                    p.setPen(QtCore.Qt.PenStyle.NoPen)
-                    p.drawPolygon(tri)
-                    p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-
-                # Text
-                engine_font_color = snapshot_channels.get("font_color", {}).get(cell_key)
-                effective_bg = engine_fill or fmt.bg_color or "white"
-                text_pen = QtGui.QColor(
-                    engine_font_color if engine_font_color else get_contrast_font_color(effective_bg)
-                )
-                p.setPen(text_pen)
-
-                value_type = get_value_type(cell_value)
-                try:
-                    if value_type == "null":
-                        v = self._format_null(fmt.format_null)
-                    elif value_type == "error":
-                        v = str(cell_value) if not fmt.format_error else f"[{cell_value}]"
-                    elif value_type == "numeric":
-                        v = "" if cell_value is None else str(cell_value)
-                        v = self._format_value(v, fmt.format_number)
-                    else:
-                        v = "" if cell_value is None else str(cell_value)
-                        v = self._format_text(v, fmt.format_text)
-                except Exception:
-                    v = "" if cell_value is None else str(cell_value)
-
-                font = QtGui.QFont(
-                    fmt.font_family if fmt.font_family else "sans-serif",
-                    fmt.font_size if fmt.font_size else 9,
-                )
-                font.setWeight(QtGui.QFont.Weight(fmt.font_weight))
-                font.setItalic(fmt.font_italic)
-                p.setFont(font)
-
-                h_align = fmt.text_h_align
-                if h_align == "left" and value_type == "numeric":
-                    h_align = "right"
-                align = self._get_text_alignment(h_align, fmt.text_v_align)
-                p.drawText(cell_r.adjusted(4, 0, -4, 0), align, v)
-
-                if (
-                    fmt.border_top != "none"
-                    or fmt.border_bottom != "none"
-                    or fmt.border_left != "none"
-                    or fmt.border_right != "none"
-                ):
-                    custom_borders.append((QtCore.QRect(cell_r), fmt))
-
-                x += col_w
-            y += self._m.row_h
-
-        # Custom borders
-        if custom_borders:
-            for cell_r, fmt in custom_borders:
-                self._draw_cell_borders(p, cell_r, fmt)
-
-        p.end()
+            # Custom borders
+            if custom_borders:
+                for cell_r, fmt in custom_borders:
+                    self._draw_cell_borders(p, cell_r, fmt)
+        except Exception as exc:
+            print(f"[RENDER] exception in tile render view={self._view_id[:8] if self._view_id else None}: {exc}")
+        finally:
+            p.end()
         return img
 
     def _cell_in_cached_tile_image(self, r: int, c: int) -> bool:
@@ -1681,8 +1798,19 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         return self._session.execute(command_id, **kwargs)
 
     def reload(self, *, invalidate_tiles: bool | str = False) -> None:
+        with self._span("MatrixGrid.reload"):
+            logger.info("[MatrixGrid] reload view=%s invalidate_tiles=%r", self._view_id[:8] if self._view_id else None, invalidate_tiles)
+            t0 = time.perf_counter()
+            self._reload_impl(invalidate_tiles=invalidate_tiles)
+            dur = (time.perf_counter() - t0) * 1000
+            logger.info("[MatrixGrid] reload done view=%s duration=%.3f ms", self._view_id[:8] if self._view_id else None, dur)
+            DEBUG_GUI and print(f"[RELOAD] MatrixGrid.reload view={self._view_id[:8] if self._view_id else None} invalidate={invalidate_tiles!r} duration={dur:.1f} ms")
+
+    def _reload_impl(self, *, invalidate_tiles: bool | str = False) -> None:
         # Prevent recursive reload calls that could cause freezes
+        DEBUG_GUI and print(f"[RELOAD-IMPL] view={self._view_id[:8] if self._view_id else None} invalidate={invalidate_tiles!r} _reloading={self._reloading}")
         if self._reloading:
+            DEBUG_GUI and print(f"[RELOAD-IMPL] view={self._view_id[:8] if self._view_id else None} already reloading, returning")
             return
         if invalidate_tiles is True or invalidate_tiles == "all":
             # Structure/outline or width change: _do_reload() below rebuilds
@@ -1729,9 +1857,9 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             )
             if self._viewport_update_timer is not None:
                 self._viewport_update_timer.stop()
-            if self._tile_fetch_thread is not None and self._tile_fetch_thread.isRunning():
+            if self._is_thread_alive(self._tile_fetch_thread):
                 self._tile_fetch_thread.requestInterruption()
-            if self._tile_fetch_thread_plain is not None and self._tile_fetch_thread_plain.isRunning():
+            if self._is_thread_alive(self._tile_fetch_thread_plain):
                 self._tile_fetch_thread_plain.requestInterruption()
                 self._plain_generation += 1
             if self._tile_debounce_timer is not None:
@@ -1771,7 +1899,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             # Only clear snapshot data so _start_tile_fetch() knows to refetch.
             self._tile_cache.clear()
             self._pending_tile_fetch = False
-        if self._tile_fetch_thread is not None and self._tile_fetch_thread.isRunning():
+        if self._is_thread_alive(self._tile_fetch_thread):
             self._tile_fetch_thread.requestInterruption()
         if self._tile_debounce_timer is not None:
             self._tile_debounce_timer.stop()
@@ -1781,8 +1909,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             self._do_reload()
         finally:
             self._reloading = False
-            logging.debug("DEBUG: reload() finished")
-    
+
     def current_view_meta(self) -> dict[str, Any] | None:
         """Return cached view metadata dict without calling Engine.
 
@@ -1800,6 +1927,12 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
     def _do_reload(self) -> None:
         view = self._workspace_read_model.get_view(self._view_id)
+        meta = {
+            "row_dim_ids": list(view.get("row_dim_ids", []) or []) if view else None,
+            "col_dim_ids": list(view.get("col_dim_ids", []) or []) if view else None,
+            "page_dim_ids": list(view.get("page_dim_ids", []) or []) if view else None,
+        }
+        DEBUG_GUI and print(f"[DO-RELOAD] view={self._view_id[:8] if self._view_id else None} meta={meta}")
         if view is None:
             return
 
@@ -2050,6 +2183,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         
         self.viewport().update()
         # Trigger immediate tile fetch so first paint has data (non-blocking).
+        DEBUG_GUI and print(f"[DO-RELOAD] scheduling tile fetch view={self._view_id[:8] if self._view_id else None}")
         QtCore.QTimer.singleShot(0, self._start_tile_fetch)
 
         # Debug: print grid layout
@@ -4117,10 +4251,13 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
     # ------------------------------------------------------------
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        with self._span("MatrixGrid.paintEvent"):
+            self._paint_event_impl(event)
+
+    def _paint_event_impl(self, event: QtGui.QPaintEvent) -> None:
         # Avoid calling super().paintEvent(event) — QAbstractScrollArea::paintEvent
         # is empty, and QFrame::paintEvent can create an internal painter that
         # conflicts with our viewport painter in some Qt6/Fusion paths.
-        _paint_t0 = time.perf_counter()
         p = QtGui.QPainter(self.viewport())
         p.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
         try:
@@ -4179,7 +4316,6 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 f"visible_cells={len(visible_cells)} "
                 f"bounds=({first_row}-{last_row},{first_col}-{last_col})"
             )
-            _t_col_headers = time.perf_counter()
 
             # Headers backgrounds
             header_br = QtCore.QRect(0, 0, vp.width(), header_h)
@@ -4400,8 +4536,6 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         p.drawText(r, QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight, "\u03A3")
                         p.setFont(font)
             p.restore()
-            _t_row_headers = time.perf_counter()
-            logging.debug("[paint-profile] col_headers: %.3f ms", (_t_row_headers - _t_col_headers) * 1000)
 
             # Row headers: bands (left columns) + leaf column (rightmost)
             # Row bands (left side spanning blocks)
@@ -4574,8 +4708,6 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     p.drawText(rect, QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight, "\u03A3")
                     p.setFont(font)
             p.restore()
-            _t_cells = time.perf_counter()
-            logging.debug("[paint-profile] row_headers: %.3f ms", (_t_cells - _t_row_headers) * 1000)
 
             # Top-left corner (paint last so it always sits above scrolling headers)
             corner_rect = QtCore.QRect(0, 0, row_header_w, header_h)
@@ -4874,8 +5006,6 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
             # Restore painter state (remove clip)
             p.restore()
-            _t_overlays = time.perf_counter()
-            logging.debug("[paint-profile] cells: %.3f ms", (_t_overlays - _t_cells) * 1000)
 
             if custom_borders:
                 p.save()
@@ -4974,9 +5104,6 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
                         p.drawRect(current_rect)
                 p.restore()
-            _t_done = time.perf_counter()
-            logging.debug("[paint-profile] overlays: %.3f ms", (_t_done - _t_overlays) * 1000)
-            logging.debug("[paint-profile] total: %.3f ms", (_t_done - _paint_t0) * 1000)
 
         finally:
             p.end()

@@ -89,7 +89,9 @@ def cmd_move_view_dimension(
     if index is not None and index < 0:
         raise ValueError("index must be non-negative")
 
+    print(f"[CMD] move_view_dimension start view={view_id[:8]} dim={dim_id[:8]} dest={dest}", flush=True)
     ctx.engine.move_view_dimension(view_id, dim_id, dest=dest, index=index)
+    print(f"[CMD] move_view_dimension done view={view_id[:8]} dim={dim_id[:8]} dest={dest}", flush=True)
     return {"affected": 1, "property": "view_dimension", "view_id": view_id, "dim_id": dim_id, "dest": dest}
 
 

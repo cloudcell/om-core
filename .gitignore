@@ -21,7 +21,9 @@ demo_data/*
 !version-manual.txt
 
 /benchmarks/*.png
+/benchmarks/results/**
 /benchmarks/models/**
+/benchmarks_engines/results/**
 !lib_timelinewidget/demo/session_20260418_043345.txt
 
 log/*

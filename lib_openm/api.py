@@ -126,6 +126,9 @@ class Engine:
     def enable_dependency_tracking(self, *args, **kwargs):
         return self._core.enable_dependency_tracking(*args, **kwargs)
 
+    def dependency_tracking_disabled(self, *args, **kwargs):
+        return self._core.dependency_tracking_disabled(*args, **kwargs)
+
     def enable_multithread_recompute(self, *args, **kwargs):
         return self._core.enable_multithread_recompute(*args, **kwargs)
 

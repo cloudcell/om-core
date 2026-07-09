@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -8,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from lib_gui.workspace_read_model import WorkspaceReadModel
 
 DEBUG_GUI = os.environ.get("DEBUG_GUI", "false").lower() in ("true", "1", "yes")
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Drag-and-drop MIME type
@@ -545,12 +547,21 @@ class _ChipZoneBase(QtWidgets.QWidget):
     @QtCore.Slot(str, str)
     def _on_chip_selected(self, dim_id: str, item_id: str) -> None:
         print(f"[DEBUG _ChipZoneBase._on_chip_selected] view={self._view_id[:8]}, dim={dim_id[:8]}, item={item_id[:8]}")
+        import time
+        logger.info("[pivot_bar] chip selected view=%s dim=%s item=%s", self._view_id[:8], dim_id[:8], item_id[:8])
         if self._session is None:
             raise RuntimeError("No session available for set_page_item_id")
+        t0 = time.perf_counter()
         self._session.execute("set_page_item_id", view_id=self._view_id, dim_id=dim_id, item_id=item_id)
+        logger.info(
+            "[pivot_bar] set_page_item_id done view=%s duration=%.3f ms",
+            self._view_id[:8], (time.perf_counter() - t0) * 1000,
+        )
+        # Page selections only change the visible slice; they do not dirty
+        # computed values.  With the read-only tile fast path in place, there
+        # is no need to block the GUI for a full recalc here.
         self.selection_changed.emit()
-        # Page dimension change requires full grid reload (cell keys change)
-        self._reload_grid()
+        logger.info("[pivot_bar] chip selection done view=%s", self._view_id[:8])
 
     def _reload_grid(self) -> None:
         """Trigger grid reload - call this after structural changes."""

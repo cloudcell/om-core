@@ -11,6 +11,7 @@ from lib_command.core.session import CommandSession
 from lib_gui.grid_read_model import GridReadModel
 from lib_gui.outline_read_model import OutlineReadModel
 from lib_gui.workspace_read_model import WorkspaceReadModel
+from lib_utils.gui_profiler import GuiProfiler, NOOP_SPAN
 
 # Debug flag for GUI - set DEBUG_GUI=true to enable verbose logging
 DEBUG_GUI = os.environ.get("DEBUG_GUI", "false").lower() in ("true", "1", "yes")
@@ -47,6 +48,7 @@ class ViewTab(QtWidgets.QWidget):
         grid_read_model=None,
         workspace_read_model=None,
         outline_read_model=None,
+        profiler: GuiProfiler | None = None,
     ) -> None:
         super().__init__(parent)
         self._session = session
@@ -54,7 +56,11 @@ class ViewTab(QtWidgets.QWidget):
         self._grid_read_model = grid_read_model or GridReadModel(session) if session is not None else None
         self._workspace_read_model = workspace_read_model or WorkspaceReadModel(session) if session is not None else None
         self._outline_read_model = outline_read_model or OutlineReadModel(session) if session is not None else None
+        self._profiler = profiler
+        self._span = profiler.span if profiler is not None else NOOP_SPAN
         self._tree_model: TreeSliceTableModel | None = None
+        self._needs_full_reload: bool = False
+        self._last_known_layout: dict[str, Any] | None = None
 
         # Grey tab background
         self.setAutoFillBackground(True)
@@ -77,6 +83,7 @@ class ViewTab(QtWidgets.QWidget):
             view_id=view_id,
             session=session,
             parent=self._canvas,
+            profiler=profiler,
         )
 
         self.top_left_bar = TopLeftChipBar(view_id=view_id, parent=self._canvas, workspace_read_model=self._workspace_read_model, session=session)
@@ -143,6 +150,12 @@ class ViewTab(QtWidgets.QWidget):
         else:
             self.table.reload()
         self.pivot_bar.rebuild(self._view_id)
+        if view is not None:
+            self._last_known_layout = {
+                "row_dim_ids": list(view.get("row_dim_ids", []) or []),
+                "col_dim_ids": list(view.get("col_dim_ids", []) or []),
+                "page_dim_ids": list(view.get("page_dim_ids", []) or []),
+            }
 
         # Until full placeholder refactor lands, we treat:
         # - top-left as page dims (filters)
@@ -155,6 +168,7 @@ class ViewTab(QtWidgets.QWidget):
             tr_ids = list(view.get("col_dim_ids", []) or [])
         self.top_left_bar.rebuild(self._view_id, tl_ids)
         self.page_axis_bar.rebuild(self._view_id, tr_ids)
+        DEBUG_GUI and print(f"[REBUILD-BARS] done view={self._view_id[:8]}")
 
     @property
     def tree_model(self) -> TreeSliceTableModel | None:
@@ -521,12 +535,22 @@ class ViewTab(QtWidgets.QWidget):
 
     @QtCore.Slot(str, str, int)
     def _on_drop_row(self, dim_id: str, source_zone: str, insert_index: int) -> None:
+        import time
+        print(f"[DROP-ROW] entered dim={dim_id[:8]} source={source_zone} idx={insert_index}")
+        t0 = time.perf_counter()
         try:
             self._execute_move_dimension(dim_id, dest="row", index=insert_index)
         except Exception:
             return
-        self._rebuild_bars()
+        t1 = time.perf_counter()
+        print(f"[DROP-ROW] command returned after {(t1-t0)*1000:.1f} ms")
+        t2 = time.perf_counter()
         self.workspace_changed.emit()
+        t3 = time.perf_counter()
+        print(
+            f"[DROP-ROW] move={t1-t0:.1f}ms rebuild={t2-t1:.1f}ms "
+            f"emit={t3-t2:.1f}ms total={t3-t0:.1f}ms dim={dim_id[:8]}"
+        )
 
     @QtCore.Slot(str, str, int)
     def _on_drop_col(self, dim_id: str, source_zone: str, insert_index: int) -> None:
@@ -617,16 +641,17 @@ class ViewTab(QtWidgets.QWidget):
                     pass
 
     def reload(self, view_id: str | None = None, *, invalidate_tiles: bool | str = False) -> None:
-        if view_id is not None:
-            self._view_id = view_id
-        # Save scroll position before reload so we can restore it if requested
-        saved_h = saved_v = None
-        if isinstance(self.table, MatrixGrid):
-            saved_h = self.table.horizontalScrollBar().value()
-            saved_v = self.table.verticalScrollBar().value()
-        # _rebuild_bars() already calls table.reload(); do not reload twice.
-        self._rebuild_bars(invalidate_tiles=invalidate_tiles)
-        # Restore scroll position if preservation was requested
-        if isinstance(self.table, MatrixGrid) and getattr(self.table, '_preserve_scroll', False):
-            self.table.horizontalScrollBar().setValue(saved_h)
-            self.table.verticalScrollBar().setValue(saved_v)
+        with self._span("ViewTab.reload"):
+            if view_id is not None:
+                self._view_id = view_id
+            # Save scroll position before reload so we can restore it if requested
+            saved_h = saved_v = None
+            if isinstance(self.table, MatrixGrid):
+                saved_h = self.table.horizontalScrollBar().value()
+                saved_v = self.table.verticalScrollBar().value()
+            # _rebuild_bars() already calls table.reload(); do not reload twice.
+            self._rebuild_bars(invalidate_tiles=invalidate_tiles)
+            # Restore scroll position if preservation was requested
+            if isinstance(self.table, MatrixGrid) and getattr(self.table, '_preserve_scroll', False):
+                self.table.horizontalScrollBar().setValue(saved_h)
+                self.table.verticalScrollBar().setValue(saved_v)

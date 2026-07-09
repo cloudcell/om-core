@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from .message_bus import MessageBus, MessageEnvelope, get_message_bus
 from .executor import ExecutionResult, ExecutionStatus
+from lib_utils.config import gui
 
 
 class BusTransport:
@@ -37,16 +38,17 @@ class BusTransport:
     def __init__(
         self,
         bus: Optional[MessageBus] = None,
-        timeout: float = 5.0,
+        timeout: Optional[float] = None,
     ) -> None:
         self.bus = bus or get_message_bus()
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else gui("transport", "bus_transport_timeout_seconds", 5.0)
 
     def execute(
         self,
         session_id: str,
         command_id: str,
         context: Any,
+        timeout: Optional[float] = None,
         **params
     ) -> ExecutionResult:
         """
@@ -89,12 +91,13 @@ class BusTransport:
             reply_to=reply_topic,
         )
 
+        effective_timeout = timeout if timeout is not None else self.timeout
         try:
             reply = self.bus.request(
                 topic="request.command",
                 event=request,
                 reply_topic=reply_topic,
-                timeout=self.timeout,
+                timeout=effective_timeout,
             )
         except Exception as exc:
             return ExecutionResult(

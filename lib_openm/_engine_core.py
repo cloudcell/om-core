@@ -8,6 +8,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Optional, Iterable
@@ -760,6 +761,22 @@ class _EngineCore:
         # Check thread-local override (used by worker threads)
         thread_disabled = getattr(self._thread_eval_state, "tracking_disabled", False)
         return not thread_disabled
+
+    @contextmanager
+    def dependency_tracking_disabled(self):
+        """Temporarily disable dependency tracking for the current thread.
+
+        Use this around read-only bulk queries (e.g. tile fetches) to avoid
+        forcing re-evaluation of cached cells solely to record dependency
+        edges.  Values are still read from and written to the cell cache, but
+        no graph edges are created while the context is active.
+        """
+        old_disabled = getattr(self._thread_eval_state, "tracking_disabled", False)
+        self._thread_eval_state.tracking_disabled = True
+        try:
+            yield
+        finally:
+            self._thread_eval_state.tracking_disabled = old_disabled
 
     def _reset_thread_eval_state(self) -> None:
         self._thread_eval_state.eval_context = []
@@ -5097,11 +5114,17 @@ class _EngineCore:
     ) -> CellValue:
         # Defensive: clear any stale eval stack state
         self._thread_eval_stack().clear()
+        label = f"{view_id[:8]} r={row_key} c={col_key}"
+        t0 = time.perf_counter()
         view = self.require_view_by_id(view_id)
         cube = self.require_cube_by_id(view.cube_id)
         addr = self._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key, channel=channel)
+        print(f"[GET-CELL] addr ready {label} addr={addr}", flush=True)
         # Always fetch fresh value from cube - no caching to avoid stale data
+        t1 = time.perf_counter()
         v = cube.get(addr)
+        dt_get = (time.perf_counter() - t1) * 1000
+        print(f"[GET-CELL] cube.get {label} value={v!r} dt={dt_get:.1f}ms", flush=True)
         if v is not None:
             rule = self._ws.find_anchored_rule(cube.id, addr)
             if rule is None:
@@ -5129,7 +5152,9 @@ class _EngineCore:
             eval_stack = self._thread_eval_stack()
             eval_stack.add(key)
             try:
+                t_eval = time.perf_counter()
                 computed = self._rule_evaluator.eval(expr, resolver=resolver, base_addr=addr)
+                print(f"[GET-CELL] eval cube-rule {label} dt={(time.perf_counter()-t_eval)*1000:.1f}ms value={computed!r}", flush=True)
                 return CellValue(
                     value=computed,
                     explain=Explain(source="rule", cube_id=cube.id, addr=addr, rule_body=expr),
@@ -5174,7 +5199,9 @@ class _EngineCore:
         eval_stack = self._thread_eval_stack()
         eval_stack.add(key)
         try:
+            t_eval = time.perf_counter()
             computed = self._rule_evaluator.eval(expr, resolver=resolver, base_addr=addr)
+            print(f"[GET-CELL] eval cell-rule {label} dt={(time.perf_counter()-t_eval)*1000:.1f}ms value={computed!r}", flush=True)
             return CellValue(
                 value=computed,
                 explain=Explain(source="rule", cube_id=cube.id, addr=addr, rule_body=expr),
@@ -5572,12 +5599,17 @@ class _EngineCore:
                 key.append((999, item_id))
         return tuple(key)
 
-    def _bootstrap_dependency_graph(self) -> int:
+    def _bootstrap_dependency_graph(self, only_missing: bool = False) -> int:
         """Evaluate only cells that must exist in the dependency graph.
 
         Collects hardvalues and rule-covered addresses per cube, deduplicates,
         then evaluates each target cell once with dependency tracking enabled.
         Empty cells (no rule, no hardvalue) are skipped entirely.
+
+        When *only_missing* is True, addresses that are already cached and have
+        recorded dependency edges are skipped.  This is used after a full
+        recalculation to fill in newly-visible addresses without re-evaluating
+        the entire workspace.
 
         Returns the total number of target cells evaluated.
         """
@@ -5619,6 +5651,12 @@ class _EngineCore:
             self._dep_tracking_enabled = True
             try:
                 for addr in sorted_targets:
+                    if only_missing:
+                        # Skip cells already computed and tracked.
+                        if cube.get(addr) is not None:
+                            node_key = self._cell_node_key(cube.id, addr)
+                            if self._dep_graph.has_precedents(node_key):
+                                continue
                     self._get_cell_by_addr(cube, addr)
                     total_evaluated += 1
             finally:
@@ -7873,6 +7911,14 @@ class _EngineCore:
         addr = _normalize_addr_for_cube(cube, addr)
 
         tracking = self._is_tracking_enabled()
+        # Fast read-only path: bulk tile queries disable dependency tracking.
+        # If the value is already cached, return it immediately without
+        # checking dirty flags, looking up rules, or re-evaluating.
+        if not tracking:
+            v = cube.get(addr)
+            if v is not None:
+                return v
+
         eval_context = self._thread_eval_context()
         pending_precedents = self._thread_pending_precedents()
         eval_stack = self._thread_eval_stack()
