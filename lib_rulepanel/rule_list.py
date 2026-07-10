@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import List, Set, Optional
 
 from PySide6.QtWidgets import (
-    QScrollArea, QWidget, QVBoxLayout, QLabel, 
+    QScrollArea, QWidget, QVBoxLayout, QLabel,
     QFrame, QApplication
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QTimer
@@ -61,8 +61,8 @@ class RuleListWidget(QScrollArea):
         
         self.container = QWidget()
         self.layout = QVBoxLayout(self.container)
-        self.layout.setSpacing(2)
-        self.layout.setContentsMargins(12, 8, 12, 8)
+        self.layout.setSpacing(1)
+        self.layout.setContentsMargins(12, 4, 12, 4)
         self.layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         self.setWidget(self.container)
@@ -177,13 +177,19 @@ class RuleListWidget(QScrollArea):
         row.setup_edit_mode()
         self.edit_started.emit()
         
-    def end_row_edit(self, row: EditableRuleRow):
-        """End editing."""
+    def end_row_edit(self, row: EditableRuleRow, cancelled: bool = False):
+        """End editing.
+
+        ``cancelled`` is True when the edit was abandoned (e.g. Escape or the
+        cross button). In that case we still emit ``edit_ended`` but we do NOT
+        emit ``rule_edited``, so the caller can avoid refreshing unchanged views.
+        """
         was_editing = row.is_editing
         row.is_editing = False
         if was_editing:
             self.edit_ended.emit()
-            self.rule_edited.emit(row.rule_body)
+            if not cancelled:
+                self.rule_edited.emit(row.rule_body)
         # Keep the row selected after editing ends
         self.select_row(row)
         

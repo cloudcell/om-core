@@ -134,4 +134,4 @@ class GUIEventAdapter:
         if isinstance(self.gui_window, QtCore.QObject):
             self.gui_window._set_status_requested.emit("error", f"Error: {error}")
         else:
-            self.gui_window._set_status_state("error", f"Error: {error}")
+            self.gui_window._flash_status_message(f"Error: {error}")

@@ -136,8 +136,7 @@ def register_plugin(main_window: QtWidgets.QMainWindow, plugins_menu: QtWidgets.
                 try:
                     main_window._dock_browser.rebuild()  # type: ignore[attr-defined]
                     main_window._reload_active_view()  # type: ignore[attr-defined]
-                    main_window._set_status_state(  # type: ignore[attr-defined]
-                        "ready",
+                    main_window._flash_status_message(  # type: ignore[attr-defined]
                         f"Import complete: {result.sheets_imported} sheet(s)"
                     )
                 except Exception:
@@ -149,7 +148,7 @@ def register_plugin(main_window: QtWidgets.QMainWindow, plugins_menu: QtWidgets.
                         dialog.log_warn(warning)
             else:
                 try:
-                    main_window._set_status_state("error", "Import failed")  # type: ignore[attr-defined]
+                    main_window._flash_status_message("Import failed")  # type: ignore[attr-defined]
                 except Exception:
                     pass
 

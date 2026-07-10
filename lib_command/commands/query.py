@@ -1314,6 +1314,36 @@ def _compute_viewport_snapshot(
     requested_channels: list[str],
     allow_evaluation: bool = False,
 ) -> tuple[dict[str, dict], dict[str, dict[str, Any]], set[tuple[str, ...]]]:
+    """Locking entry point for read-only snapshot computation.
+
+    The engine is not generally thread-safe, but GUI tile queries run on
+    background QThreads. Acquiring the engine's global reentrant lock here
+    serializes those queries against engine mutations (e.g. rename) on the
+    main thread and prevents concurrent reads from seeing torn workspace state.
+    """
+    with engine._engine_lock:
+        return _compute_viewport_snapshot_locked(
+            engine,
+            view,
+            cube,
+            row_keys,
+            col_keys,
+            page_selections,
+            requested_channels,
+            allow_evaluation=allow_evaluation,
+        )
+
+
+def _compute_viewport_snapshot_locked(
+    engine,
+    view,
+    cube,
+    row_keys: list[tuple[str, ...]],
+    col_keys: list[tuple[str, ...]],
+    page_selections: dict[str, str],
+    requested_channels: list[str],
+    allow_evaluation: bool = False,
+) -> tuple[dict[str, dict], dict[str, dict[str, Any]], set[tuple[str, ...]]]:
     """Read-only cell computation shared by single and batch snapshot commands.
 
     Returns ``(cells, channel_values, visible_addrs)``.  By default it never
@@ -1445,7 +1475,7 @@ def cmd_grid_viewport_snapshot(
             flush=True,
         )
     with _span("grid_viewport_snapshot.compute_cells"):
-        cells, channel_values, visible_addrs = _compute_viewport_snapshot(
+        cells, channel_values, visible_addrs = _compute_viewport_snapshot_locked(
             engine, view, cube, row_keys, col_keys, page_selections, requested_channels,
             allow_evaluation=allow_evaluation,
         )
@@ -1546,7 +1576,7 @@ def cmd_grid_viewport_snapshot_batch(
             bounds = tile["bounds"]
             row_keys = tile["row_keys"]
             col_keys = tile["col_keys"]
-            cells, channel_values, visible_addrs = _compute_viewport_snapshot(
+            cells, channel_values, visible_addrs = _compute_viewport_snapshot_locked(
                 engine, view, cube, row_keys, col_keys, page_selections, requested_channels,
                 allow_evaluation=allow_evaluation,
             )

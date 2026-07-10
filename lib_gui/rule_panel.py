@@ -431,6 +431,18 @@ class RulePanel(QtWidgets.QWidget):
         # TODO: Re-implement for new widget
         return super().eventFilter(obj, event)
 
+    def is_editing(self) -> bool:
+        """Return True if any rule row is currently in inline edit mode."""
+        return self._list.is_any_row_editing()
+
+    def cancel_edit(self) -> bool:
+        """Cancel the current inline edit, if any. Returns True if cancelled."""
+        editing_row = self._list.get_editing_row()
+        if editing_row is not None:
+            editing_row.cancel_edit()
+            return True
+        return False
+
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
         """Cancel any active edit when double-clicking outside the rule list."""
         # Check if double-click was inside the rule list
@@ -441,9 +453,7 @@ class RulePanel(QtWidgets.QWidget):
         
         # Double-click was outside the list (header, pill bar, empty area)
         # Cancel any active edit
-        editing_row = self._list.get_editing_row()
-        if editing_row:
-            editing_row.cancel_edit()
+        if self.cancel_edit():
             event.accept()
         else:
             super().mouseDoubleClickEvent(event)

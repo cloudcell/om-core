@@ -224,6 +224,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
     content_changed = QtCore.Signal()
     presentation_changed = QtCore.Signal()  # Visual changes (widths, formats) that need sync
     cell_value_changed = QtCore.Signal(int, int, str)  # row, col, value - for recording
+    tile_fetch_started = QtCore.Signal(str, str)  # view_id, reason
+    tile_fetch_finished = QtCore.Signal(str)  # view_id
 
     @QtCore.Slot()
     def _do_navigate_slot(self) -> None:
@@ -1356,6 +1358,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         self._tile_image_cache.clear()
         self._tile_plain_cache.clear()
         self._pending_cell_values.clear()
+        self._force_tile_refetch = True
         self._pending_tile_fetch = True
         self.viewport().update()
         self._start_tile_fetch()
@@ -1467,12 +1470,6 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             if self._is_thread_alive(self._tile_fetch_thread_plain):
                 self._tile_fetch_thread_plain.requestInterruption()
         gen = self._tile_generation
-        DEBUG_GUI and print(
-            f"DEBUG _start_tile_fetch: gen={gen} "
-            f"old_thread_running={self._is_thread_alive(self._tile_fetch_thread)} "
-            f"pending={self._pending_tile_fetch} "
-            f"force_refetch={getattr(self, '_force_tile_refetch', False)}"
-        )
 
         # --- Plain fetch (value-only, large preload area, background, best-effort) ---
         if plain_enabled:
@@ -1480,16 +1477,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             if not self._is_thread_alive(self._tile_fetch_thread_plain):
                 plain_skip = set(self._tile_plain_cache.keys()) | set(self._tile_image_cache.keys())
                 plain_tiles = self._build_tile_list(plain_first_r, plain_last_r, plain_first_c, plain_last_c, tile_h, tile_w, plain_skip)
-                logger.info(
-                    "[MatrixGrid] tile fetch start view=%s plain_tiles=%d visible=(%d-%d,%d-%d) channels=%r",
-                    self._view_id[:8] if self._view_id else None, len(plain_tiles), first_row, last_row, first_col, last_col, fmt_channels,
-                )
                 if plain_tiles:
                     plain_tiles.sort(key=_tile_priority)
-                    DEBUG_GUI and print(
-                        f"[TILE-FETCH] start plain view={self._view_id[:8] if self._view_id else None} "
-                        f"tiles={len(plain_tiles)} visible=({plain_first_r}-{plain_last_r},{plain_first_c}-{plain_last_c})"
-                    )
                     plain_thread = TileFetchThread(
                         session=self._session,
                         view_id=self._view_id,
@@ -1507,6 +1496,14 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     self._tile_fetch_thread_plain = plain_thread
                     plain_thread.start()
 
+        # Determine the reason for the formatted fetch before consuming flags.
+        if getattr(self, '_force_tile_refetch', False):
+            tile_reason = "data_change"
+        elif not self._tile_cache:
+            tile_reason = "initial"
+        else:
+            tile_reason = "scroll"
+
         # --- Formatted fetch (full channels, visible area only) ---
         # After reload _tile_cache is empty, so refetch even if old images exist.
         # During scroll _tile_cache has data, so skip tiles that have both snapshot and image.
@@ -1515,7 +1512,6 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         if getattr(self, '_force_tile_refetch', False):
             fmt_skip: set = set()
             self._force_tile_refetch = False
-            DEBUG_GUI and print(f"DEBUG _start_tile_fetch: force refetch, skip=0")
         else:
             # Tiles are skippable only if they have fresh data AND a rendered image
             fmt_skip = {
@@ -1523,13 +1519,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 if self._formatted_tile_data_gens.get(bounds, -1) == self._data_generation
                 and self._image_data_gens.get(bounds, -1) == self._data_generation
             }
-            DEBUG_GUI and print(f"DEBUG _start_tile_fetch: skip={len(fmt_skip)} tiles")
         fmt_tiles = self._build_tile_list(first_row, last_row, first_col, last_col, tile_h, tile_w, fmt_skip)
-        DEBUG_GUI and print(f"DEBUG _start_tile_fetch: fmt_tiles={len(fmt_tiles)}")
-        DEBUG_GUI and print(
-            f"[TILE-FETCH] start formatted view={self._view_id[:8] if self._view_id else None} "
-            f"tiles={len(fmt_tiles)} visible=({first_row}-{last_row},{first_col}-{last_col}) channels={fmt_channels}"
-        )
         if fmt_tiles:
             fmt_tiles.sort(key=_tile_priority)
             fmt_thread = TileFetchThread(
@@ -1548,6 +1538,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             fmt_thread.tile_ready.connect(self._on_tile_ready)
             fmt_thread.finished.connect(self._on_tile_thread_finished)
             self._tile_fetch_thread = fmt_thread
+            self.tile_fetch_started.emit(self._view_id, tile_reason)
             fmt_thread.start()
 
     @QtCore.Slot()
@@ -1656,6 +1647,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
     @QtCore.Slot()
     def _on_tile_thread_finished(self) -> None:
         """When formatted thread finishes, restart if a new viewport fetch was queued."""
+        self.tile_fetch_finished.emit(self._view_id)
         fmt_running = self._is_thread_alive(self._tile_fetch_thread)
         if self._pending_tile_fetch and not fmt_running:
             self._start_tile_fetch()

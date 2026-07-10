@@ -6,6 +6,23 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from lib_command.core.domain_event_publisher import publish_domain_event
+from lib_command.core.message_bus import get_message_bus
+
+
+def _publish_workspace_event(topic: str, correlation_id: str | None, path: str, **extra: Any) -> None:
+    """Publish a workspace lifecycle domain event."""
+    payload: dict[str, Any] = {"correlation_id": correlation_id, "path": path}
+    payload.update(extra)
+    publish_domain_event(get_message_bus(), topic, payload, correlation_id=correlation_id)
+
+
+def _publish_calculation_event(topic: str, correlation_id: str | None, scope: str, **extra: Any) -> None:
+    """Publish a calculation lifecycle domain event."""
+    payload: dict[str, Any] = {"correlation_id": correlation_id, "scope": scope}
+    payload.update(extra)
+    publish_domain_event(get_message_bus(), topic, payload, correlation_id=correlation_id)
+
 
 def cmd_recalc(ctx, scope: str = "all") -> dict:
     """
@@ -18,7 +35,8 @@ def cmd_recalc(ctx, scope: str = "all") -> dict:
     if not engine:
         raise ValueError("No engine available")
 
-    ctx.status(f"Recalculating ({scope})...")
+    correlation_id = getattr(ctx, "correlation_id", None)
+    _publish_calculation_event("event.calculation.started", correlation_id, scope)
 
     # NOTE: _invalidate_slice_dependent_rules() was removed from here.
     # It is now called internally by engine outline-mutation methods
@@ -26,60 +44,49 @@ def cmd_recalc(ctx, scope: str = "all") -> dict:
     # delete_dimension_items) so that invalidation happens at the mutation
     # site, not during recalculation.
 
+    result_scope = scope
     try:
         if scope == "all":
             if hasattr(engine, 'recalculate_all'):
                 engine.recalculate_all()
             elif hasattr(engine, 'calculate'):
                 engine.calculate()
-            generation = engine.bump_generation()
-            return {
-                "scope": scope,
+            result = {
+                "scope": result_scope,
                 "ok": True,
-                "generation": generation,
+                "generation": engine.bump_generation(),
                 "node_count": 0,
             }
         elif scope == "dirty":
-            try:
-                node_count = engine.recompute_dirty_nodes()
-                return {
-                    "scope": scope,
-                    "ok": True,
-                    "generation": engine.bump_generation(),
-                    "node_count": node_count,
-                }
-            except Exception as e:
-                return {
-                    "scope": scope,
-                    "ok": False,
-                    "generation": engine.generation,
-                    "node_count": 0,
-                    "error": str(e),
-                }
+            node_count = engine.recompute_dirty_nodes()
+            result = {
+                "scope": result_scope,
+                "ok": True,
+                "generation": engine.bump_generation(),
+                "node_count": node_count,
+            }
         elif scope.startswith("cube:"):
             cube_id = scope[5:]
             if hasattr(engine, 'recalculate_cube'):
                 engine.recalculate_cube(cube_id)
-            generation = engine.bump_generation()
-            return {
-                "scope": scope,
+            result = {
+                "scope": result_scope,
                 "ok": True,
-                "generation": generation,
+                "generation": engine.bump_generation(),
                 "node_count": 0,
             }
         elif scope == "visible":
             # Deprecated: "visible" was a misnomer that recomputed the whole
             # workspace.  Fall back to a full recalculation.
-            scope = "all"
+            result_scope = "all"
             if hasattr(engine, 'recalculate_all'):
                 engine.recalculate_all()
             elif hasattr(engine, 'calculate'):
                 engine.calculate()
-            generation = engine.bump_generation()
-            return {
-                "scope": scope,
+            result = {
+                "scope": result_scope,
                 "ok": True,
-                "generation": generation,
+                "generation": engine.bump_generation(),
                 "node_count": 0,
             }
         else:
@@ -88,16 +95,20 @@ def cmd_recalc(ctx, scope: str = "all") -> dict:
                 engine.recalculate_all()
             elif hasattr(engine, 'calculate'):
                 engine.calculate()
-            generation = engine.bump_generation()
-            return {
-                "scope": scope,
+            result = {
+                "scope": result_scope,
                 "ok": True,
-                "generation": generation,
+                "generation": engine.bump_generation(),
                 "node_count": 0,
             }
+        _publish_calculation_event("event.calculation.finished", correlation_id, result_scope, ok=True)
+        return result
     except Exception as e:
+        _publish_calculation_event(
+            "event.calculation.finished", correlation_id, result_scope, ok=False, error=str(e)
+        )
         return {
-            "scope": scope,
+            "scope": result_scope,
             "ok": False,
             "generation": engine.generation,
             "node_count": 0,
@@ -135,16 +146,18 @@ def cmd_save(ctx, path: Optional[str] = None) -> dict:
     if adapter is None:
         raise ValueError("No persistence adapter available in command context")
 
+    correlation_id = getattr(ctx, "correlation_id", None)
+    _publish_workspace_event("event.workspace.saving", correlation_id, save_path)
     try:
         adapter.save_workspace(save_path, ws)
         variables = getattr(ctx, "variables", None)
         if variables is not None:
             variables["current_file_path"] = save_path
             variables["current_file_dirty"] = False
-        ctx.status(f"Saved to {save_path}")
+        _publish_workspace_event("event.workspace.saved", correlation_id, save_path)
         return {"path": save_path}
     except Exception as e:
-        ctx.status(f"Error saving: {e}")
+        _publish_workspace_event("event.workspace.save_failed", correlation_id, save_path, error=str(e))
         raise
 
 
@@ -154,6 +167,8 @@ def cmd_load(ctx, path: str) -> dict:
     if adapter is None:
         raise ValueError("No persistence adapter available in command context")
 
+    correlation_id = getattr(ctx, "correlation_id", None)
+    _publish_workspace_event("event.workspace.loading", correlation_id, path)
     try:
         ws, profile = adapter.load_workspace_profiled(path)
         if ws:
@@ -231,7 +246,6 @@ def cmd_load(ctx, path: str) -> dict:
                 try:
                     bootstrap_profile = engine.bootstrap_dependency_graph()
                 except Exception as exc:
-                    ctx.status(f"Load failed: dependency graph bootstrap error: {exc}")
                     raise ValueError(f"Dependency graph bootstrap failed after loading {path}: {exc}") from exc
 
             variables = getattr(ctx, "variables", None)
@@ -239,17 +253,14 @@ def cmd_load(ctx, path: str) -> dict:
                 variables["current_file_path"] = path
                 variables["current_file_dirty"] = False
 
-            ctx.status(f"Loaded {path}")
-
             # Notify all observers that a new workspace is now active.
             # Isolated: bus errors must never fail the load command.
             try:
-                from lib_command.core.domain_event_publisher import publish_domain_event
-                from lib_command.core.message_bus import get_message_bus
-                publish_domain_event(
-                    get_message_bus(),
+                _publish_workspace_event(
                     "event.workspace.loaded",
-                    {"workspace_id": getattr(ws, "id", None), "path": path},
+                    correlation_id,
+                    path,
+                    workspace_id=getattr(ws, "id", None),
                 )
             except Exception:
                 pass  # Event emission failure is non-fatal
@@ -258,7 +269,7 @@ def cmd_load(ctx, path: str) -> dict:
         else:
             raise ValueError(f"Failed to load: {path}")
     except Exception as e:
-        ctx.status(f"Error loading: {e}")
+        _publish_workspace_event("event.workspace.load_failed", correlation_id, path, error=str(e))
         raise
 
 

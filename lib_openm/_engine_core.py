@@ -150,6 +150,11 @@ class _EngineCore:
         self._facade = facade
         self._ws = workspace
         self._event_publisher = event_publisher
+        # Global lock that serializes engine mutations against read-only snapshot
+        # queries that run on background GUI threads. Reentrant so that a public
+        # engine method can safely call other engine methods while holding it.
+        self._engine_lock = threading.RLock()
+
         # Per-cube locks for thread-safe access during parallel recompute.
         # A single global lock would serialize all workers even when they touch
         # different cubes; per-cube locks allow parallelism across cubes.
@@ -4204,59 +4209,63 @@ class _EngineCore:
         new_name = new_name.strip()
         if not new_name:
             return
-        for it in dim.items:
-            if it.id != item_id and it.name.strip().casefold() == new_name.casefold():
-                raise ValueError(f"Duplicate item name in dimension '{dim.name}': {new_name}")
-        # Also check against group labels in the graph (if bootstrapped)
-        try:
-            from lib_openm.graph_mutation import _all_nodes_for_dim
-            for node in _all_nodes_for_dim(dim_id, self._ws):
-                if node["kind"] == "GROUP":
-                    if str(node.get("label", "")).strip().casefold() == new_name.casefold():
-                        raise ValueError(f"Duplicate item name in dimension '{dim.name}': {new_name}")
-        except RuntimeError:
-            pass  # System cubes not bootstrapped; skip graph check
-        old_item_name: str | None = None
-        for it in dim.items:
-            if it.id == item_id:
-                if it.name == new_name:
-                    return
-                old_item_name = it.name
-                break
-        if old_item_name is None:
-            raise KeyError(item_id)
-
-        # Graph-first: use rename_dimension_item primitive when graph is in sync
-        from lib_openm.graph_mutation import rename_dimension_item as _rename_graph
-        from lib_openm.graph_mutation import _dim_by_name, _cube_by_name
-        has_system_cubes = (
-            _dim_by_name(self._ws, "%RECNODADR") is not None
-            and _cube_by_name(self._ws, "%RECNOD") is not None
-        )
-        if has_system_cubes:
-            _rename_graph(dim_id, item_id, new_name, self._ws)
-        else:
-            # No graph yet; rename in dim.items and dim.outline
-            for idx, it in enumerate(dim.items):
+        with self._engine_lock:
+            for it in dim.items:
+                if it.id != item_id and it.name.strip().casefold() == new_name.casefold():
+                    raise ValueError(f"Duplicate item name in dimension '{dim.name}': {new_name}")
+            # Also check against group labels in the graph (if bootstrapped)
+            try:
+                from lib_openm.graph_mutation import _all_nodes_for_dim
+                for node in _all_nodes_for_dim(dim_id, self._ws):
+                    if node["kind"] == "GROUP":
+                        if str(node.get("label", "")).strip().casefold() == new_name.casefold():
+                            raise ValueError(f"Duplicate item name in dimension '{dim.name}': {new_name}")
+            except RuntimeError:
+                pass  # System cubes not bootstrapped; skip graph check
+            old_item_name: str | None = None
+            for it in dim.items:
                 if it.id == item_id:
-                    dim.items[idx] = DimensionItem(id=it.id, name=new_name)
+                    if it.name == new_name:
+                        return
+                    old_item_name = it.name
                     break
-            self._rename_item_in_outline(dim, item_id, new_name)
+            if old_item_name is None:
+                raise KeyError(item_id)
 
-        self._rename_dimension_item_in_all_rules(dim.name, old_item_name, new_name)
-        self._function_cache.clear()
-        self._invalidate_hierarchy_rules_for_dim(dim_id)
-        if hasattr(self, '_invalidate_view_model'):
-            self._invalidate_view_model()
-        if self._on_dimension_item_renamed is not None:
-            self._on_dimension_item_renamed(dim_id, item_id, new_name)
-        # Phase E: Publish domain event for GUI adapter
-        self._publish_event("dimension_item.renamed", {
-            "dimension_id": dim_id,
-            "item_id": item_id,
-            "old_label": old_item_name,
-            "new_label": new_name,
-        })
+            # Graph-first: use rename_dimension_item primitive when graph is in sync
+            from lib_openm.graph_mutation import rename_dimension_item as _rename_graph
+            from lib_openm.graph_mutation import _dim_by_name, _cube_by_name
+            has_system_cubes = (
+                _dim_by_name(self._ws, "%RECNODADR") is not None
+                and _cube_by_name(self._ws, "%RECNOD") is not None
+            )
+            if has_system_cubes:
+                _rename_graph(dim_id, item_id, new_name, self._ws)
+            else:
+                # No graph yet; rename in dim.items and dim.outline
+                for idx, it in enumerate(dim.items):
+                    if it.id == item_id:
+                        dim.items[idx] = DimensionItem(id=it.id, name=new_name)
+                        break
+                self._rename_item_in_outline(dim, item_id, new_name)
+
+            self._rename_dimension_item_in_all_rules(dim.name, old_item_name, new_name)
+            self._function_cache.clear()
+            self._invalidate_hierarchy_rules_for_dim(dim_id)
+            if hasattr(self, '_invalidate_view_model'):
+                self._invalidate_view_model()
+            if self._on_dimension_item_renamed is not None:
+                self._on_dimension_item_renamed(dim_id, item_id, new_name)
+            # Phase E: Publish domain event for GUI adapter
+            self._publish_event(
+                "dimension_item.renamed",
+                {
+                    "dimension_id": dim_id,
+                    "item_id": item_id,
+                    "old_label": old_item_name,
+                    "new_label": new_name,
+                },
+            )
 
     def _rename_outline_group_label(self, dim_id: str, old_label: str, new_label: str) -> None:
         """Rename an outline group label and update all rules that reference it.
@@ -5171,17 +5180,11 @@ class _EngineCore:
     ) -> CellValue:
         # Defensive: clear any stale eval stack state
         self._thread_eval_stack().clear()
-        label = f"{view_id[:8]} r={row_key} c={col_key}"
-        t0 = time.perf_counter()
         view = self.require_view_by_id(view_id)
         cube = self.require_cube_by_id(view.cube_id)
         addr = self._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key, channel=channel)
-        print(f"[GET-CELL] addr ready {label} addr={addr}", flush=True)
         # Always fetch fresh value from cube - no caching to avoid stale data
-        t1 = time.perf_counter()
         v = cube.get(addr)
-        dt_get = (time.perf_counter() - t1) * 1000
-        print(f"[GET-CELL] cube.get {label} value={v!r} dt={dt_get:.1f}ms", flush=True)
         if v is not None:
             rule = self._ws.find_anchored_rule(cube.id, addr)
             if rule is None:
@@ -5209,9 +5212,7 @@ class _EngineCore:
             eval_stack = self._thread_eval_stack()
             eval_stack.add(key)
             try:
-                t_eval = time.perf_counter()
                 computed = self._rule_evaluator.eval(expr, resolver=resolver, base_addr=addr)
-                print(f"[GET-CELL] eval cube-rule {label} dt={(time.perf_counter()-t_eval)*1000:.1f}ms value={computed!r}", flush=True)
                 return CellValue(
                     value=computed,
                     explain=Explain(source="rule", cube_id=cube.id, addr=addr, rule_body=expr),
@@ -5256,9 +5257,7 @@ class _EngineCore:
         eval_stack = self._thread_eval_stack()
         eval_stack.add(key)
         try:
-            t_eval = time.perf_counter()
             computed = self._rule_evaluator.eval(expr, resolver=resolver, base_addr=addr)
-            print(f"[GET-CELL] eval cell-rule {label} dt={(time.perf_counter()-t_eval)*1000:.1f}ms value={computed!r}", flush=True)
             return CellValue(
                 value=computed,
                 explain=Explain(source="rule", cube_id=cube.id, addr=addr, rule_body=expr),
@@ -5300,7 +5299,6 @@ class _EngineCore:
         self, view_id: str, row_key: tuple[str, ...], col_key: tuple[str, ...], value: Any,
         channel: str | None = None,
     ) -> None:
-        print(f"[DEBUG SET_CELL_BY_KEYS] CALLED view_id={view_id[:20] if view_id else None}... value={value}")
         if _DEBUG_SET_CELL:
             print(f"DEBUG SET_CELL_BY_KEYS: called view_id={view_id}, row_key={row_key}, col_key={col_key}, value={value}")
             import traceback
@@ -5308,21 +5306,17 @@ class _EngineCore:
         view = self.require_view_by_id(view_id)
         cube = self.require_cube_by_id(view.cube_id)
         addr = self._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key, channel=channel)
-        print(f"[DEBUG SET_CELL_BY_KEYS] addr={addr}")
         if _DEBUG_SET_CELL:
             print(f"DEBUG SET_CELL_BY_KEYS: addr={addr}")
         prev = cube.get(addr)
         has_override = cube.is_user_override(addr)
         if prev == value and not has_override:
-            print(f"[DEBUG SET_CELL_BY_KEYS] SKIP: prev==value")
             if _DEBUG_SET_CELL:
                 print(f"DEBUG SET_CELL_BY_KEYS: prev == value, returning")
             return
-        print(f"[DEBUG SET_CELL_BY_KEYS] pushing _CellEditAction")
         if _DEBUG_SET_CELL:
             print(f"DEBUG SET_CELL_BY_KEYS: pushing undo action, prev={prev}, after={value}")
         self._undo.push_and_do(_CellEditAction(engine=self, cube=cube, addr=addr, before=prev, after=value))
-        print(f"[DEBUG SET_CELL_BY_KEYS] COMPLETE")
 
     def _clear_cell_hardvalue_by_ids(
         self, view_id: str, row_key: tuple[str, ...], col_key: tuple[str, ...],
@@ -9536,7 +9530,6 @@ class _CellEditAction(Action):
     description: str = "Change cell value"
 
     def do(self) -> None:
-        print(f"[DEBUG ACTION] _CellEditAction.do() addr={self.addr} after={self.after}")
         self.cube.set(self.addr, self.after)
         if self.after is not None:
             self.cube.user_override_addrs.add(self.addr)
@@ -9544,7 +9537,6 @@ class _CellEditAction(Action):
             self.cube.user_override_addrs.discard(self.addr)
         self.engine._cell_cache.clear()
         self.engine._on_cell_value_changed(self.cube.id, self.addr)
-        print(f"[DEBUG ACTION] _CellEditAction.do() COMPLETE")
 
     def undo(self) -> None:
         self.cube.set(self.addr, self.before)

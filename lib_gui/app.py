@@ -7,7 +7,6 @@ import signal
 import threading
 import time
 import uuid
-import warnings
 from typing import Any
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -25,6 +24,9 @@ from lib_gui.format_toolbox import FormatToolboxDock
 from lib_gui.info_toolbox import InfoToolboxDock
 from lib_gui.model_browser import ModelBrowserDock
 from lib_gui.performance_watch import PerformanceWatchDock
+from lib_gui.status_manager import StatusManager
+from lib_gui.status_owner import StatusOwner
+from lib_gui.status_state import StatusState
 from lib_timelinegui.panel import TimelineDockManager
 from lib_gui.view_workspace import ViewWorkspacePane
 from lib_gui.view_workspace_controller import ViewWorkspaceController
@@ -547,9 +549,10 @@ class MainWindow(QtWidgets.QMainWindow):
     dimension_item_renamed_requested = QtCore.Signal()  # dimension item rename → rebuild rule panels
     selection_changed_requested = QtCore.Signal(int, int, int, int)  # row, col, anchor_row, anchor_col
     _refresh_gui_requested = QtCore.Signal()          # internal: GUIEventAdapter → refresh_gui
-    _set_status_requested = QtCore.Signal(str, str)  # internal: GUIEventAdapter → _set_status_state
+    _set_status_requested = QtCore.Signal(str, str)  # internal: GUIEventAdapter → _on_status_flash_requested
     timeline_switch_requested = QtCore.Signal()         # workspace loaded → switch timeline session file
     _profiler_start_requested = QtCore.Signal(dict)  # internal: queued profiler start from any thread
+    _status_owner_request = QtCore.Signal(str, str, str)  # action, owner, state
 
     def __init__(self, progress_callback: Any = None, defer_window_restore: bool = False, session: Any = None, recorder: Any = None, macro_runner: Any = None) -> None:
         super().__init__()
@@ -594,13 +597,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.grid_read_model = GridReadModel(self.session)
         self.workspace_read_model = WorkspaceReadModel(self.session)
         
-        # Initialize status state and widget BEFORE event subscriptions to prevent
+        # Initialize status manager and widget BEFORE event subscriptions to prevent
         # AttributeError when events fire during engine/workspace initialization
-        self._status_state: str = "ready"
-        self._status_last_change: float = 0.0
-        self._status_generation: int = 0
-        self._pending_ready: QtCore.QTimer | None = None
+        self._status_manager = StatusManager(self)
+        self._status_manager.changed.connect(self._on_status_changed)
+        self._status_state: str = self._status_manager.current().value
         self._status_indicator: QtWidgets.QLabel | None = None
+        # Unique owner IDs for recalc lifecycles that span async signals.
+        self._status_owner_id = 0
+        self._dirty_recompute_owner: str | None = None
+        self._tile_fetch_grid: "MatrixGrid" | None = None
 
         # Debounce timer for UI refresh requests. A burst of bus events (e.g.
         # a script creating many model objects) is coalesced into a single
@@ -612,8 +618,15 @@ class MainWindow(QtWidgets.QMainWindow):
         # Domain event subscriptions (work in both local and remote mode)
         self.session.subscribe("event.profiler.start", self._on_profiler_start)
         self.session.subscribe("event.workspace.dirty_changed", self._on_workspace_dirty_changed)
+        self.session.subscribe("event.workspace.loading", self._on_workspace_loading_event)
         self.session.subscribe("event.workspace.loaded", self._on_workspace_loaded_event)
         self.session.subscribe("event.workspace.created", self._on_workspace_loaded_event)
+        self.session.subscribe("event.workspace.load_failed", self._on_workspace_load_failed_event)
+        self.session.subscribe("event.workspace.saving", self._on_workspace_saving_event)
+        self.session.subscribe("event.workspace.saved", self._on_workspace_saved_event)
+        self.session.subscribe("event.workspace.save_failed", self._on_workspace_save_failed_event)
+        self.session.subscribe("event.calculation.started", self._on_calculation_started_event)
+        self.session.subscribe("event.calculation.finished", self._on_calculation_finished_event)
         self.session.subscribe("event.workspace.checkpoint_created", self._on_checkpoint_created_event)
         self.session.subscribe("event.workspace.checkpoint_restored", self._on_checkpoint_restored_event)
         self.session.subscribe("event.dimension.renamed", self._on_dimension_renamed_event)
@@ -685,7 +698,7 @@ class MainWindow(QtWidgets.QMainWindow):
             profiler=self.profiler,
         )
         self._workspace.view_changed.connect(self._on_active_view_changed)
-        self._workspace.status_changed.connect(self._set_status_state)
+        self._workspace.status_changed.connect(self._on_status_flash_requested)
         self._workspace.request_status_flash.connect(self._flash_status_message)
         self._workspace.table_selection_changed.connect(self._on_table_selection_changed)
         self._workspace.table_focus_requested.connect(self._focus_active_grid)
@@ -710,14 +723,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._recalc_thread: QtCore.QThread | None = None
         self._recalc_worker: RecalcWorker | None = None
 
-        # Global Esc shortcut to cancel recalculation - works regardless of focus
-        self._cancel_shortcut = QtGui.QShortcut(
-            QtGui.QKeySequence("Escape"),
-            self,
-        )
-        self._cancel_shortcut.activated.connect(self._on_cancel_requested)
-        self._cancel_shortcut.setContext(QtCore.Qt.ShortcutContext.ApplicationShortcut)
-
         # Handle SIGINT (Ctrl+C) and SIGTERM (pkill) to save window state
         # Only works in main thread - skip if running in background thread
         import threading
@@ -741,6 +746,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._lower_tabs = self._workspace_pane.lower_tabs
         self._splitter = self._workspace_pane.splitter
 
+        # Track rule panel edit mode for the status bar focus indicator.
+        self._rule_panel_editing = False
+        self._rule_panel._list.edit_started.connect(self._on_rule_panel_edit_started)
+        self._rule_panel._list.edit_ended.connect(self._on_rule_panel_edit_ended)
+
         self._rule_bar.returnPressed.connect(self._on_rule_bar_enter)
         self._rule_bar.installEventFilter(self)
         self._flow_panel.navigate_requested.connect(self._on_flow_navigate_requested)
@@ -756,7 +766,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.dimension_renamed_requested.connect(self._do_dimension_renamed)
         self.dimension_item_renamed_requested.connect(self._do_dimension_item_renamed)
         self._refresh_gui_requested.connect(self.refresh_gui)
-        self._set_status_requested.connect(self._set_status_state)
+        self._set_status_requested.connect(self._on_status_flash_requested)
+        self._status_owner_request.connect(self._on_status_owner_request)
         self.selection_changed_requested.connect(self._do_update_selection)
         self.timeline_switch_requested.connect(self._do_switch_timeline_session)
 
@@ -844,10 +855,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._status_indicator.setAlignment(
             QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft
         )
-        self._status_state = "ready"
-        self._status_last_change = time.monotonic()
-        self._pending_ready: QtCore.QTimer | None = None
-        self._status_generation = 0
         # Attach the custom status indicator to the QStatusBar using the
         # public API so it shows up consistently across styles.
         sb = self.statusBar()
@@ -875,7 +882,7 @@ class MainWindow(QtWidgets.QMainWindow):
             )
         except Exception:
             pass
-        self._set_status_state("ready", "Ready")
+        self._on_status_changed(self._status_manager.current())
 
         # Selection statistics widget on the right side of the status bar.
         self._selection_stats_actions: dict[str, QtGui.QAction] = {}
@@ -974,10 +981,12 @@ class MainWindow(QtWidgets.QMainWindow):
             # Install application-level event filter to catch Esc even when UI is frozen
             qapp.installEventFilter(self)
 
-        self._set_status_state("computing", "Computing…")
-        self._workspace.initialize()
-        self._refresh_error_status(allow_from_computing=True)
-        self._update_focus_indicator()
+        with self._status_manager.hold(
+            StatusOwner.load(self._next_status_owner_id()), StatusState.LOADING
+        ):
+            self._workspace.initialize()
+            self._refresh_error_status(allow_from_computing=True)
+            self._update_focus_indicator()
 
         # Register the GUI profiler endpoint so the TUI can target this window.
         try:
@@ -2072,10 +2081,34 @@ class MainWindow(QtWidgets.QMainWindow):
             node = node.parentWidget()
         return None
 
+    def _on_rule_panel_edit_started(self) -> None:
+        """Mark that a rule is being edited so the focus indicator reflects it."""
+        self._rule_panel_editing = True
+        self._update_focus_indicator()
+
+    def _on_rule_panel_edit_ended(self) -> None:
+        """Clear rule-edit mode, restore focus indicator, and return focus to grid."""
+        self._rule_panel_editing = False
+        self._update_focus_indicator()
+        self._focus_active_window_grid()
+
+    def _focus_active_window_grid(self) -> None:
+        """Move focus to the active grid in whichever window is currently active."""
+        active_window = QtWidgets.QApplication.activeWindow()
+        if active_window is self:
+            self._focus_active_grid()
+        elif active_window is not None and hasattr(active_window, 'controller'):
+            controller = active_window.controller
+            if hasattr(controller, 'focus_active_grid'):
+                controller.focus_active_grid()
+
     def _update_focus_indicator(
         self,
         widget: QtWidgets.QWidget | None = None,
     ) -> None:
+        if getattr(self, '_rule_panel_editing', False):
+            self._focus_indicator.setText("Focus: Rule Panel | editing rule")
+            return
         desc = self._current_focus_description(widget)
         text = f"Focus: {desc}" if desc else "Focus: —"
         self._focus_indicator.setText(text)
@@ -2471,8 +2504,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.session.execute("cancel_recalculation")
             # Stop the background thread
             self._stop_recalc_thread()
-            self._set_status_state("error", "Recalculation cancelled")
+            self._flash_status_message("Recalculation cancelled")
         else:
+            # Cancel an active rule panel inline edit first.
+            if hasattr(self, '_rule_panel') and self._rule_panel.is_editing():
+                self._rule_panel.cancel_edit()
+                return
             # Not recalculating - forward Esc to active grid to cancel editing
             grid = self._table
             if isinstance(grid, MatrixGrid) and grid._editor.isVisible():
@@ -2513,12 +2550,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_recalc_thread()
         
         self._recalculating = True
-        # Take ownership of the status indicator from any pending deferred
-        # recalculation poll so F9's ready state doesn't fight with it.
-        self._deferred_recalc_in_progress = False
         # Freeze UI - only Esc key works
         self._freeze_ui_for_calculation()
-        self._set_status_state("computing", "Recalculating… (Esc to cancel)")
 
         # Create and start worker thread
         self._recalc_thread = QtCore.QThread(self)
@@ -2548,7 +2581,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.is_remote:
             # Visible-cell invalidation requires direct engine access.
             # A `recalculate_visible_cells` command is deferred to F6k follow-up.
-            self._set_status_state("error", "F9 not supported in remote mode")
+            self._flash_status_message("F9 not supported in remote mode")
             return
         AT_VALUE = "at_value"
 
@@ -2609,14 +2642,13 @@ class MainWindow(QtWidgets.QMainWindow):
         print(f"[Shift+F9] COMPLETED")
         print(f"{'='*60}\n")
 
-        self._set_status_state("ready", f"Recalculated {invalidated_count} visible cells")
-
     @QtCore.Slot(bool)
     def _on_recalc_finished(self, success: bool) -> None:
         """Handle successful recalculation completion."""
         logger.info("[MainWindow] recalc_finished success=%s", success)
         self._thaw_ui_after_calculation()
         if not success:
+            self._recalculating = False
             return
         for controller in self._iter_workspace_controllers():
             controller.refresh_all_views()
@@ -2624,14 +2656,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_flow_panel_from_current()
         self._refresh_error_status(allow_from_computing=True)
         self._mark_dirty(True)
-        self._set_status_state("ready", "Ready")
         self._recalculating = False
 
     @QtCore.Slot(str)
     def _on_recalc_error(self, error_msg: str) -> None:
         """Handle recalculation error/cancellation."""
         self._thaw_ui_after_calculation()
-        self._set_status_state("error", error_msg)
+        self._flash_status_message(error_msg)
         self._recalculating = False
 
     def _stop_recalc_thread(self, *, force: bool = False) -> None:
@@ -2694,59 +2725,102 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_active_view_changed(self, view_id: str) -> None:
         logger.info("[MainWindow] active_view_changed view=%s", view_id[:8])
         self._active_view_id = view_id
+        self._sync_tile_fetch_signals()
         self._sync_flow_panel_from_current()
         self._update_selection_stats()
 
     def _flash_status_message(self, text: str) -> None:
         self.statusBar().showMessage(text, 1500)
 
-    def _set_status_state(self, state: str, text: str) -> None:
-        if getattr(self, '_is_closing', False):
+    @QtCore.Slot(str, str)
+    def _on_status_flash_requested(self, state: str, text: str) -> None:
+        """Handle legacy two-argument status requests from workspace or event adapter."""
+        self._flash_status_message(text)
+
+    @QtCore.Slot(str, str, str)
+    def _on_status_owner_request(self, action: str, owner: str, state: str) -> None:
+        """Push or pop a status owner from a thread-safe signal."""
+        if action == "begin":
+            if not self._status_manager.has(owner):
+                self._status_manager.begin(owner, StatusState(state))
+        elif action == "end":
+            if self._status_manager.has(owner):
+                self._status_manager.end(owner)
+
+    @QtCore.Slot(str, str)
+    def _on_tile_fetch_started(self, view_id: str, reason: str) -> None:
+        """Push a visible_refresh owner while the active grid fetches formatted tiles."""
+        if reason in ("scroll", "prefetch"):
             return
-        # While a deferred recalculation is in progress, only errors and the
-        # explicit computing message may change the status indicator.  The
-        # deferred recalc poller clears the guard before it restores ready.
-        if state == "ready" and getattr(self, '_deferred_recalc_in_progress', False):
+        owner = StatusOwner.visible_refresh(view_id)
+        state = StatusState.LOADING if reason == "initial" else StatusState.CALCULATING
+        if not self._status_manager.has(owner):
+            self._status_manager.begin(owner, state)
+
+    @QtCore.Slot(str)
+    def _on_tile_fetch_finished(self, view_id: str) -> None:
+        """Pop the visible_refresh owner when the formatted tile thread finishes."""
+        owner = StatusOwner.visible_refresh(view_id)
+        if self._status_manager.has(owner):
+            self._status_manager.end(owner)
+
+    def _sync_tile_fetch_signals(self) -> None:
+        """Connect tile fetch signals to the current active grid and disconnect from the previous one."""
+        grid = self._table if isinstance(self._table, MatrixGrid) else None
+        if grid is self._tile_fetch_grid:
             return
-        if state == "ready" and self._status_state == "computing":
-            elapsed = time.monotonic() - self._status_last_change
-            if elapsed < 0.2:
-                remaining = int((0.2 - elapsed) * 1000)
-                if self._pending_ready is None:
-                    generation = self._status_generation + 1
-                    self._pending_ready = QtCore.QTimer.singleShot(
-                        remaining,
-                        lambda: self._apply_delayed_ready(generation, text),
-                    )
-                return
+        if self._tile_fetch_grid is not None:
+            try:
+                self._tile_fetch_grid.tile_fetch_started.disconnect(self._on_tile_fetch_started)
+            except RuntimeError:
+                pass
+            try:
+                self._tile_fetch_grid.tile_fetch_finished.disconnect(self._on_tile_fetch_finished)
+            except RuntimeError:
+                pass
+            # End any dangling visible_refresh owner for the previous grid's view.
+            try:
+                old_view_id = self._tile_fetch_grid._view_id
+            except AttributeError:
+                old_view_id = None
+            if old_view_id:
+                owner = StatusOwner.visible_refresh(old_view_id)
+                if self._status_manager.has(owner):
+                    self._status_manager.end(owner)
+            self._tile_fetch_grid = None
+        if grid is not None:
+            grid.tile_fetch_started.connect(self._on_tile_fetch_started)
+            grid.tile_fetch_finished.connect(self._on_tile_fetch_finished)
+            self._tile_fetch_grid = grid
 
-        self._status_generation += 1
-        self._status_state = state
-        self._status_last_change = time.monotonic()
-        self._pending_ready = None
-
-        label = text or ""
-        if state == "ready" and not label:
-            label = "Ready"
-        elif state == "computing" and not label:
-            label = "Computing…"
-        elif state == "error":
-            base = "Error"
-            if label and label != "Error":
-                label = f"{base} | {label}"
-            else:
-                label = base
-
-        icon = "🟢" if state == "ready" else "🟠" if state == "computing" else "🔴"
-        full = f"{icon} {label}" if label else icon
-
+    def _on_status_changed(self, state: StatusState) -> None:
+        """Render the current StatusState on the status indicator."""
+        self._status_state = state.value
         if self._status_indicator is None:
             return
+        labels = {
+            StatusState.WAITING_FOR_COMMAND: "Waiting for command",
+            StatusState.LOADING: "Loading…",
+            StatusState.SAVING: "Saving…",
+            StatusState.CALCULATING: "Calculating…",
+            StatusState.ERROR: "Error",
+        }
+        label = labels[state]
+        if state == StatusState.ERROR:
+            detail = self._first_error_detail()
+            if detail:
+                label = detail
+        icon = (
+            "🟢"
+            if state == StatusState.WAITING_FOR_COMMAND
+            else "🟠"
+            if state in (StatusState.LOADING, StatusState.SAVING, StatusState.CALCULATING)
+            else "🔴"
+        )
         try:
-            self._status_indicator.setText(full)
+            self._status_indicator.setText(f"{icon} {label}")
         except RuntimeError:
             return
-
         try:
             sb = self.statusBar()
             if isinstance(sb, QtWidgets.QStatusBar):
@@ -2754,36 +2828,30 @@ class MainWindow(QtWidgets.QMainWindow):
         except RuntimeError:
             return
 
-    def _apply_delayed_ready(self, generation: int, text: str) -> None:
-        if getattr(self, '_is_closing', False):
-            return
-        if generation != self._status_generation + 1:
-            return
-        if getattr(self, '_deferred_recalc_in_progress', False):
-            return
-        if self._active_view_has_errors():
-            detail = self._first_error_detail()
-            self._set_status_state("error", detail if detail is not None else "Error")
-            return
-        self._set_status_state("ready", text)
+    def _next_status_owner_id(self) -> str:
+        """Return a monotonic correlation ID for unique status owners."""
+        self._status_owner_id += 1
+        return str(self._status_owner_id)
 
     def _refresh_error_status(self, allow_from_computing: bool = False) -> None:
-        if self._status_state == "computing" and not allow_from_computing:
+        """Push/pop the error_tracker owner based on whether any view has errors."""
+        if self._status_manager.current() == StatusState.CALCULATING and not allow_from_computing:
             return
         if self._active_view_has_errors():
-            detail = self._first_error_detail()
-            self._set_status_state("error", detail if detail is not None else "Error")
+            if not self._status_manager.has(StatusOwner.error_tracker()):
+                self._status_manager.begin(StatusOwner.error_tracker(), StatusState.ERROR)
+            elif self._status_manager.current() == StatusState.ERROR:
+                # Selection/viewport changed while already in ERROR; refresh label.
+                self._on_status_changed(StatusState.ERROR)
         else:
-            self._set_status_state("ready", "Ready")
+            if self._status_manager.has(StatusOwner.error_tracker()):
+                self._status_manager.end(StatusOwner.error_tracker())
 
     # Phase B: GUI event bus subscribers for ui.* events
     def _on_ui_status_update(self, event):
         """Handle ui.status.update events from the GUIEventAdapter."""
         message = event.payload.get("message", "") if hasattr(event, "payload") else ""
-        level = event.payload.get("level", "info") if hasattr(event, "payload") else "info"
-        if level != "error" and getattr(self, '_deferred_recalc_in_progress', False):
-            return
-        self._set_status_state("error" if level == "error" else "ready", message)
+        self._flash_status_message(message)
 
     def _on_ui_refresh(self, event):
         """Handle ui.refresh events from the GUIEventAdapter.
@@ -2889,10 +2957,72 @@ class MainWindow(QtWidgets.QMainWindow):
         if getattr(self, "gui_view_model", None) is not None:
             self.gui_view_model.set_dirty(is_dirty)
 
+    def _on_workspace_loading_event(self, event):
+        """Handle event.workspace.loading — push a LOADING owner."""
+        correlation_id = getattr(event, "correlation_id", None)
+        if not correlation_id:
+            return
+        owner = StatusOwner.load(correlation_id)
+        self._status_owner_request.emit("begin", owner, StatusState.LOADING.value)
+
     def _on_workspace_loaded_event(self, event):
-        """Handle event.workspace.loaded — emit signal so slot runs on GUI thread."""
+        """Handle event.workspace.loaded — end load owner and switch timeline session."""
         logger.info("[MainWindow] event workspace.loaded")
+        correlation_id = getattr(event, "correlation_id", None)
+        if correlation_id:
+            owner = StatusOwner.load(correlation_id)
+            self._status_owner_request.emit("end", owner, "")
         self.timeline_switch_requested.emit()
+
+    def _on_workspace_load_failed_event(self, event):
+        """Handle event.workspace.load_failed — end load owner and flash error."""
+        correlation_id = getattr(event, "correlation_id", None)
+        if correlation_id:
+            owner = StatusOwner.load(correlation_id)
+            self._status_owner_request.emit("end", owner, "")
+        error = event.payload.get("error", "") if hasattr(event, "payload") else ""
+        self._set_status_requested.emit("error", f"Load failed: {error}")
+
+    def _on_workspace_saving_event(self, event):
+        """Handle event.workspace.saving — push a SAVING owner."""
+        correlation_id = getattr(event, "correlation_id", None)
+        if not correlation_id:
+            return
+        owner = StatusOwner.save(correlation_id)
+        self._status_owner_request.emit("begin", owner, StatusState.SAVING.value)
+
+    def _on_workspace_saved_event(self, event):
+        """Handle event.workspace.saved — end save owner."""
+        correlation_id = getattr(event, "correlation_id", None)
+        if not correlation_id:
+            return
+        owner = StatusOwner.save(correlation_id)
+        self._status_owner_request.emit("end", owner, "")
+
+    def _on_workspace_save_failed_event(self, event):
+        """Handle event.workspace.save_failed — end save owner and flash error."""
+        correlation_id = getattr(event, "correlation_id", None)
+        if correlation_id:
+            owner = StatusOwner.save(correlation_id)
+            self._status_owner_request.emit("end", owner, "")
+        error = event.payload.get("error", "") if hasattr(event, "payload") else ""
+        self._set_status_requested.emit("error", f"Save failed: {error}")
+
+    def _on_calculation_started_event(self, event):
+        """Handle event.calculation.started — push a CALCULATING owner."""
+        correlation_id = getattr(event, "correlation_id", None)
+        if not correlation_id:
+            return
+        owner = StatusOwner.recalc(correlation_id)
+        self._status_owner_request.emit("begin", owner, StatusState.CALCULATING.value)
+
+    def _on_calculation_finished_event(self, event):
+        """Handle event.calculation.finished — end recalc owner."""
+        correlation_id = getattr(event, "correlation_id", None)
+        if not correlation_id:
+            return
+        owner = StatusOwner.recalc(correlation_id)
+        self._status_owner_request.emit("end", owner, "")
 
     def _on_checkpoint_created_event(self, event):
         """Handle event.workspace.checkpoint_created — emit signal so slot runs on GUI thread."""
@@ -2908,10 +3038,24 @@ class MainWindow(QtWidgets.QMainWindow):
         """Handle event.engine.status_changed events from the bus."""
         payload = event.payload if hasattr(event, "payload") else {}
         level = payload.get("level", "ready")
-        message = payload.get("message", "")
-        if level == "ready" and getattr(self, '_deferred_recalc_in_progress', False):
+        owner = StatusOwner.engine()
+        if level == "ready":
+            if self._status_manager.has(owner):
+                self._status_manager.end(owner)
             return
-        self._set_status_state(level, message)
+        mapped = {
+            "computing": StatusState.CALCULATING,
+            "calculating": StatusState.CALCULATING,
+            "loading": StatusState.LOADING,
+            "saving": StatusState.SAVING,
+            "error": StatusState.ERROR,
+        }.get(level)
+        if mapped is None:
+            return
+        if self._status_manager.has(owner):
+            self._status_manager.update(owner, mapped)
+        else:
+            self._status_manager.begin(owner, mapped)
 
     def _on_profiler_start(self, event: Any) -> None:
         """Handle event.profiler.start — marshal to GUI thread via signal."""
@@ -2984,6 +3128,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._workspace.add_view_tab(view_id)
         except Exception:
             logging.exception("[_do_add_view_tab] failed for %s", view_id[:8])
+        self._sync_tile_fetch_signals()
 
     def _on_view_activated_event(self, event):
         """Handle event.view.activated — emit signal so slot runs on GUI thread."""
@@ -3066,6 +3211,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._workspace.rebuild_tabs()
         except Exception:
             logging.exception("[_do_rebuild_tabs] failed")
+        self._sync_tile_fetch_signals()
         try:
             self._dock_browser.rebuild()
         except RuntimeError:
@@ -3109,7 +3255,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if event.key() == QtCore.Qt.Key.Key_Escape:
             if getattr(self, '_recalculating', False) and self.session is not None:
                 self.session.execute("cancel_recalculation")
-                self._set_status_state("error", "Recalculation cancelled")
+                self._flash_status_message("Recalculation cancelled")
                 event.accept()
                 return
         super().keyPressEvent(event)
@@ -3117,12 +3263,29 @@ class MainWindow(QtWidgets.QMainWindow):
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         """Application-level event filter - intercepts F9 and blocks events during recalc."""
         # Intercept F9 at the earliest possible level (before child widgets see it)
-        if event.type() == QtCore.QEvent.Type.KeyPress:
+        if event.type() in (
+            QtCore.QEvent.Type.KeyPress,
+            QtCore.QEvent.Type.ShortcutOverride,
+        ):
             key_event = QtGui.QKeyEvent(event)  # type: ignore[arg-type]
             if key_event.key() == QtCore.Qt.Key.Key_F9:
                 # F9 always triggers recalculation, regardless of focus
                 self._on_recalculate()
                 return True  # Event handled, stop propagation
+            # Cancel an active rule panel edit before any child widget (grid
+            # editor, line edit, etc.) swallows the Escape key. This must work
+            # in both the main window and any secondary workspace window.
+            if key_event.key() == QtCore.Qt.Key.Key_Escape:
+                from lib_gui.rule_panel import RulePanel
+                active_window = QtWidgets.QApplication.activeWindow()
+                rule_panel = None
+                if active_window is not None:
+                    rule_panel = active_window.findChild(RulePanel)
+                if rule_panel is None and hasattr(self, '_rule_panel'):
+                    rule_panel = self._rule_panel
+                if rule_panel is not None and rule_panel.is_editing():
+                    rule_panel.cancel_edit()
+                    return True
         
         # When recalculating, block ALL events except Esc
         if self._recalculating:
@@ -3199,31 +3362,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self._mark_dirty(True)
 
     def _delete_current_rule(self) -> None:
-        self._set_status_state("computing", "Computing…")
-        removed = False
-        if isinstance(self._table, MatrixGrid):
-            keys = self._table.selected_keys()
-            if keys is None:
+        owner = StatusOwner.recalc(self._next_status_owner_id())
+        self._status_manager.begin(owner, StatusState.CALCULATING)
+        try:
+            removed = False
+            if isinstance(self._table, MatrixGrid):
+                keys = self._table.selected_keys()
+                if keys is None:
+                    return
+                row_key, col_key = keys
+                result = self.session.execute(
+                    "delete_rule_anchored",
+                    view_id=self._active_view_id,
+                    cell_ref={
+                        "kind": "ids",
+                        "row_key": row_key,
+                        "col_key": col_key,
+                    },
+                )
+                removed = result.success
+            else:
+                # Phase E: Index-based mutations removed. Model must provide key access.
                 return
-            row_key, col_key = keys
-            result = self.session.execute(
-                "delete_rule_anchored",
-                view_id=self._active_view_id,
-                cell_ref={
-                    "kind": "ids",
-                    "row_key": row_key,
-                    "col_key": col_key,
-                },
-            )
-            removed = result.success
-        else:
-            # Phase E: Index-based mutations removed. Model must provide key access.
-            return
 
-        if removed:
-            self._on_rules_changed()
-        else:
-            self._refresh_error_status(allow_from_computing=True)
+            if removed:
+                self._on_rules_changed()
+            else:
+                self._refresh_error_status(allow_from_computing=True)
+        finally:
+            self._status_manager.end(owner)
 
     @QtCore.Slot()
     def _on_clear_override(self) -> None:
@@ -3294,22 +3461,6 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self._actions.act_redo.setEnabled(can_redo)
         self._actions.act_redo.setText(f"Redo {redo_desc}" if redo_desc else "Redo")
-        
-        # Keep status reserved for recalculation/ready/error state; don't
-        # overwrite the indicator with an undo hint while a deferred
-        # recalculation is still in progress (or the label already says so).
-        status_text = (
-            self._status_indicator.text().lower()
-            if self._status_indicator is not None
-            else ""
-        )
-        is_computing = (
-            getattr(self, '_deferred_recalc_in_progress', False)
-            or "computing" in status_text
-            or "recalculating" in status_text
-        )
-        if undo_desc and not is_computing:
-            self._set_status_state("ready", f"Press Ctrl+Z to undo: {undo_desc}")
 
     def _update_copy_paste_actions(self) -> None:
         if not self._workspace.has_tabs:
@@ -3631,14 +3782,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self._workspace.refresh_table()
 
     def _reload_active_view(self) -> None:
-        self._set_status_state("computing", "Computing…")
-        self._workspace.reload_active_view()
-        # Derive current view from session state, not workspace saved default.
-        result = self.session.query("active_view_current")
-        view_id = result.get("active_view_id") if result else None
-        if view_id is not None:
-            self._active_view_id = view_id
-        self._refresh_error_status(allow_from_computing=True)
+        owner = StatusOwner.load(self._next_status_owner_id())
+        self._status_manager.begin(owner, StatusState.LOADING)
+        try:
+            self._workspace.reload_active_view()
+            # Derive current view from session state, not workspace saved default.
+            result = self.session.query("active_view_current")
+            view_id = result.get("active_view_id") if result else None
+            if view_id is not None:
+                self._active_view_id = view_id
+            self._sync_tile_fetch_signals()
+            self._refresh_error_status(allow_from_computing=True)
+        finally:
+            self._status_manager.end(owner)
 
     def _on_workspace_changed(self, event=None) -> None:
         if getattr(self, '_in_workspace_changed', False):
@@ -3647,16 +3803,18 @@ class MainWindow(QtWidgets.QMainWindow):
         logger.info("[MainWindow] workspace_changed start")
         t0 = time.perf_counter()
         try:
-            self._set_status_state("computing", "Computing…")
-            self._suppress_tile_fetches(True)
-            self._dock_browser.rebuild()
-            self._reload_active_view()
-            for win in list(self._workspace_windows):
-                DEBUG_GUI and print(f"DEBUG _on_workspace_changed: reloading window {win._workspace_number if hasattr(win, '_workspace_number') else 'unknown'}")
-                win.controller.reload_active_view()
-            self._rule_panel.rebuild()
-            self._after_mutation_enqueue_recompute()
-            self._refresh_error_status(allow_from_computing=True)
+            with self._status_manager.hold(
+                StatusOwner.load(self._next_status_owner_id()), StatusState.LOADING
+            ):
+                self._suppress_tile_fetches(True)
+                self._dock_browser.rebuild()
+                self._reload_active_view()
+                for win in list(self._workspace_windows):
+                    DEBUG_GUI and print(f"DEBUG _on_workspace_changed: reloading window {win._workspace_number if hasattr(win, '_workspace_number') else 'unknown'}")
+                    win.controller.reload_active_view()
+                self._rule_panel.rebuild()
+                self._after_mutation_enqueue_recompute()
+                self._refresh_error_status(allow_from_computing=True)
         finally:
             logger.info("[MainWindow] workspace_changed done duration=%.3f ms", (time.perf_counter() - t0) * 1000)
             self._in_workspace_changed = False
@@ -3694,7 +3852,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if dirty_count > 0:
             self._start_dirty_recompute()
         else:
-            self._deferred_recalc_in_progress = False
             self._refresh_table()
             self._suppress_tile_fetches(False)
 
@@ -3704,8 +3861,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._dirty_recompute_in_progress = True
         self._recompute_pending_again = False
-        self._deferred_recalc_in_progress = True
-        self._set_status_state("computing", "Calculating…")
+        self._dirty_recompute_owner = StatusOwner.recalc(self._next_status_owner_id())
+        self._status_manager.begin(self._dirty_recompute_owner, StatusState.CALCULATING)
         self._suppress_tile_fetches(True)
 
         self._dirty_recompute_thread = QtCore.QThread(self)
@@ -3733,11 +3890,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self._recompute_pending_again = False
             # The current worker has already quit; create a new one.
             self._dirty_recompute_in_progress = False
+            self._suppress_tile_fetches(False)
+            if self._dirty_recompute_owner is not None:
+                self._status_manager.end(self._dirty_recompute_owner)
+                self._dirty_recompute_owner = None
             self._start_dirty_recompute()
             return
 
+        if self._dirty_recompute_owner is not None:
+            self._status_manager.end(self._dirty_recompute_owner)
+            self._dirty_recompute_owner = None
         self._dirty_recompute_in_progress = False
-        self._deferred_recalc_in_progress = False
         self._suppress_tile_fetches(False)
         for grid in self._iter_matrix_grids():
             if generation is not None:
@@ -3747,17 +3910,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_rule_bar_from_current()
         self._sync_flow_panel_from_current()
         self._refresh_error_status(allow_from_computing=True)
-        self._set_status_state("ready", "Ready")
 
     @QtCore.Slot(str)
     def _on_dirty_recompute_error(self, error_msg: str) -> None:
         """Handle dirty recalculation failure on the GUI thread."""
         logger.error("[MainWindow] dirty recompute error: %s", error_msg)
+        if self._dirty_recompute_owner is not None:
+            self._status_manager.end(self._dirty_recompute_owner)
+            self._dirty_recompute_owner = None
         self._dirty_recompute_in_progress = False
         self._recompute_pending_again = False
-        self._deferred_recalc_in_progress = False
         self._suppress_tile_fetches(False)
-        self._set_status_state("error", error_msg)
+        self._flash_status_message(error_msg)
         self._refresh_error_status(allow_from_computing=True)
 
     def _sync_view_state_to_session_store(self) -> None:
@@ -3928,9 +4092,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if getattr(self, '_dirty_recompute_in_progress', False):
             self._recompute_pending_again = True
             return
-        # Block status-bar overrides immediately; _do_deferred_recalculation
-        # will either keep this True (when dirty cells exist) or clear it.
-        self._deferred_recalc_in_progress = True
         # Defer recalculation to prevent UI freezing during header edits
         # Batch multiple rapid changes into a single recalculation
         if not hasattr(self, '_pending_recalc_timer'):
@@ -5969,7 +6130,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         result = self.session.execute("create_new_workspace")
         if not result.success:
-            self._set_status_state("error", f"New workspace failed: {result.error}")
+            logger.error("New workspace failed: %s", result.error)
+            self._flash_status_message(f"New workspace failed: {result.error}")
             return
         # Preserve dependency tracking state from checkbox
         desired_tracking = self._dock_perf._toggle.isChecked()
@@ -6020,7 +6182,8 @@ class MainWindow(QtWidgets.QMainWindow):
         t0 = time.perf_counter()
         result = self.session.execute("load_workspace", path=path)
         if not result.success:
-            self._set_status_state("error", f"Load failed: {result.error}")
+            logger.error("Load failed: %s", result.error)
+            self._flash_status_message(f"Load failed: {result.error}")
             return False
         load_profile = getattr(result, "data", {}) or {}
 
@@ -6554,10 +6717,10 @@ class MainWindow(QtWidgets.QMainWindow):
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             default_name = f"New_Model_{timestamp}.json"
-        
+
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, 
-            "Save Workspace", 
+            self,
+            "Save Workspace",
             default_name,  # Pre-filled filename
             filter="OpenM JSON (*.json);;All Files (*)",
         )
@@ -6568,7 +6731,8 @@ class MainWindow(QtWidgets.QMainWindow):
         result = self.session.execute("save_workspace", path=path)
         if not result.success:
             print(f"[SAVE] Failed: {result.error}")
-            self._set_status_state("error", f"Save failed: {result.error}")
+            logger.error("Save failed: %s", result.error)
+            self._flash_status_message(f"Save failed: {result.error}")
             return
         # Update file tracking and clear dirty flag only on success
         self._filepath = path
@@ -6593,21 +6757,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_rule_bar_from_current()
         self._sync_flow_panel_from_current()
 
-        # When the current selection is on an error cell in the MatrixGrid,
-        # surface the specific error type in the left-hand status indicator as
-        # "Error | <error type>". For legacy table views this is handled in
-        # ``_on_current_changed`` instead.
-        if isinstance(self._table, MatrixGrid):
-            keys = self._table.selected_keys()
-            if keys is not None and self._active_view_exists():
-                row_key, col_key = keys
-                cell_dto = self.cell_read_model.get_cell(self._active_view_id, row_key, col_key)
-                err = self._cell_error_text(cell_dto)
-                if err is not None:
-                    addr_label = self._selected_cell_addr_label()
-                    detail = f"{err} @ {addr_label}" if addr_label else err
-                    self._set_status_state("error", detail)
-
         # Always refresh selection statistics when the selection changes.
         self._update_selection_stats()
 
@@ -6625,42 +6774,6 @@ class MainWindow(QtWidgets.QMainWindow):
             pass
         elif source == "override":
             pass
-        elif source == "error":
-            # Re-fetch the current cell so we can surface the specific error message.
-            cell_error: str | None = None
-            cell_dto: dict | None = None
-            if isinstance(self._table, MatrixGrid):
-                keys = self._table.selected_keys()
-                if keys is not None:
-                    row_key, col_key = keys
-                    cell_dto = self.cell_read_model.get_cell(self._active_view_id, row_key, col_key)
-            else:
-                idx = self._table.currentIndex()  # type: ignore[union-attr]
-                if idx.isValid():
-                    tm = self._current_tab.tree_model
-                    if tm is not None and idx.column() > 0:
-                        row_key = tm.row_key_for_index(idx)
-                        col_key = tm.col_key_for_column(idx.column())
-                        if row_key is not None and col_key is not None:
-                            cell_dto = self.cell_read_model.get_cell(
-                                self._active_view_id,
-                                row_key=row_key,
-                                col_key=col_key,
-                            )
-                    else:
-                        # Phase E: Index-based reads removed. Model must provide key access.
-                        pass
-
-            if cell_dto is not None:
-                cell_error = self._cell_error_text(cell_dto)
-
-            if cell_error:
-                addr_label = self._selected_cell_addr_label()
-                detail = f"{cell_error} @ {addr_label}" if addr_label else cell_error
-                # Left-hand indicator: "● Error | <error type> @ <addr>".
-                self._set_status_state("error", detail)
-            else:
-                self._set_status_state("error", "Error")
         else:
             # Non-error sources leave the left indicator in its previous
             # state; we don't show a textual message in the standard status
@@ -6795,133 +6908,135 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def _on_rule_bar_enter(self) -> None:
         if isinstance(self._table, MatrixGrid):
-            text = self._rule_bar.text().strip()
-            print(f"DEBUG _on_rule_bar_enter: text='{text}'")
-            # Allow user to paste with surrounding quotes
-            if text.startswith("\"") and text.endswith("\"") and len(text) >= 2:
-                text = text[1:-1].strip()
+            owner = StatusOwner.recalc(self._next_status_owner_id())
+            self._status_manager.begin(owner, StatusState.CALCULATING)
+            try:
+                text = self._rule_bar.text().strip()
+                print(f"DEBUG _on_rule_bar_enter: text='{text}'")
+                # Allow user to paste with surrounding quotes
+                if text.startswith("\"") and text.endswith("\"") and len(text) >= 2:
+                    text = text[1:-1].strip()
 
-            # Rule syntax: LHS = expr, where LHS follows Improv-style ref rules
-            # (Dim.Item, [Dim1.Item1, Dim2.Item2, ...], Sheet::Dim.Item, ...).
-            import re
-            # Split only on the first '=' so expressions may contain '=' in IF, etc.
-            m = None if text.lstrip().startswith("=") else re.match(r"^=?\s*(.*?)\s*=\s*(.+)$", text)
-            print(f"DEBUG _on_rule_bar_enter: m={m}, text.lstrip().startswith('=')={text.lstrip().startswith('=')}")
-            if m:
-                lhs_raw = m.group(1).strip()
-                print(f"DEBUG: raw lhs before processing: {repr(lhs_raw)}")
-                if lhs_raw == "*":
-                    lhs_raw = "*.*"
+                # Rule syntax: LHS = expr, where LHS follows Improv-style ref rules
+                # (Dim.Item, [Dim1.Item1, Dim2.Item2, ...], Sheet::Dim.Item, ...).
+                import re
+                # Split only on the first '=' so expressions may contain '=' in IF, etc.
+                m = None if text.lstrip().startswith("=") else re.match(r"^=?\s*(.*?)\s*=\s*(.+)$", text)
+                print(f"DEBUG _on_rule_bar_enter: m={m}, text.lstrip().startswith('=')={text.lstrip().startswith('=')}")
+                if m:
+                    lhs_raw = m.group(1).strip()
+                    print(f"DEBUG: raw lhs before processing: {repr(lhs_raw)}")
+                    if lhs_raw == "*":
+                        lhs_raw = "*.*"
 
-                # Detect $ anchor prefix for anchored rules
-                is_anchored = False
-                print(f"DEBUG: checking if lhs starts with $: {lhs_raw.startswith('$')}")
-                if lhs_raw.startswith("$"):
-                    is_anchored = True
-                    lhs_raw = lhs_raw[1:].strip()
-                    print(f"DEBUG: stripped lhs after $: {repr(lhs_raw)}")
+                    # Detect $ anchor prefix for anchored rules
+                    is_anchored = False
+                    print(f"DEBUG: checking if lhs starts with $: {lhs_raw.startswith('$')}")
+                    if lhs_raw.startswith("$"):
+                        is_anchored = True
+                        lhs_raw = lhs_raw[1:].strip()
+                        print(f"DEBUG: stripped lhs after $: {repr(lhs_raw)}")
 
-                expr = m.group(2).strip()
-                if lhs_raw:
-                    # Slice 3: GUI no longer parses rule targets locally.
-                    # Use QueryService to resolve raw LHS string engine-side.
-                    self._set_status_state("computing", "Computing…")
-                    view = self.workspace_read_model.get_view(self._active_view_id)
-                    if not view:
-                        return
-                    resolve = self.session.query("rule_target_resolve", cube_id=view.get("cube_id"), lhs=lhs_raw)
-                    if resolve.get("error"):
-                        print(f"DEBUG: rule_target_resolve failed: {resolve['error']}")
-                        # If the user did not start with '=', they most likely
-                        # intended a rule; in that case surface the parse error.
-                        if not text.lstrip().startswith("="):
-                            QtWidgets.QMessageBox.critical(self, "Rule error", resolve["error"])
-                            self._refresh_error_status(allow_from_computing=True)
+                    expr = m.group(2).strip()
+                    if lhs_raw:
+                        # Slice 3: GUI no longer parses rule targets locally.
+                        # Use QueryService to resolve raw LHS string engine-side.
+                        view = self.workspace_read_model.get_view(self._active_view_id)
+                        if not view:
                             return
-                        # Otherwise, treat this as a normal cell entry.
-                        self._refresh_error_status(allow_from_computing=True)
-                    else:
-                        targets = resolve["targets"]
-                        print(f"DEBUG: rule_target_resolve succeeded: {targets}")
-                        try:
-                            print(f"DEBUG: calling set_rule with targets={targets}, expr='{expr}', is_anchored={is_anchored}")
-                            result = self.session.execute(
-                                "rule",
-                                cube_id=view.get("cube_id"),
-                                targets=targets,
-                                expression=expr,
-                                is_anchored=is_anchored,
-                            )
-                            if result.status.name == "ERROR":
-                                raise RuntimeError(result.error)
-                            print(f"DEBUG: set_rule succeeded")
-                        except Exception as e:
-                            print(f"DEBUG: set_rule failed: {e}")
-                            QtWidgets.QMessageBox.critical(self, "Rule error", str(e))
+                        resolve = self.session.query("rule_target_resolve", cube_id=view.get("cube_id"), lhs=lhs_raw)
+                        if resolve.get("error"):
+                            print(f"DEBUG: rule_target_resolve failed: {resolve['error']}")
+                            # If the user did not start with '=', they most likely
+                            # intended a rule; in that case surface the parse error.
+                            if not text.lstrip().startswith("="):
+                                QtWidgets.QMessageBox.critical(self, "Rule error", resolve["error"])
+                                self._refresh_error_status(allow_from_computing=True)
+                                return
+                            # Otherwise, treat this as a normal cell entry.
                             self._refresh_error_status(allow_from_computing=True)
+                        else:
+                            targets = resolve["targets"]
+                            print(f"DEBUG: rule_target_resolve succeeded: {targets}")
+                            try:
+                                print(f"DEBUG: calling set_rule with targets={targets}, expr='{expr}', is_anchored={is_anchored}")
+                                result = self.session.execute(
+                                    "rule",
+                                    cube_id=view.get("cube_id"),
+                                    targets=targets,
+                                    expression=expr,
+                                    is_anchored=is_anchored,
+                                )
+                                if result.status.name == "ERROR":
+                                    raise RuntimeError(result.error)
+                                print(f"DEBUG: set_rule succeeded")
+                            except Exception as e:
+                                print(f"DEBUG: set_rule failed: {e}")
+                                QtWidgets.QMessageBox.critical(self, "Rule error", str(e))
+                                self._refresh_error_status(allow_from_computing=True)
+                                self._on_rules_changed()
+                                return
+                            if isinstance(self._table, MatrixGrid):
+                                self._table.reload(invalidate_tiles="data")
+                            self._update_undo_redo_actions()
+                            self._sync_rule_bar_from_current()
                             self._on_rules_changed()
+                            self._refresh_error_status(allow_from_computing=True)
+                            # Clear rule bar to prevent view_workspace_controller from re-processing
+                            self._rule_bar.setText("")
                             return
-                        if isinstance(self._table, MatrixGrid):
-                            self._table.reload(invalidate_tiles="data")
-                        self._update_undo_redo_actions()
-                        self._sync_rule_bar_from_current()
-                        self._on_rules_changed()
-                        self._refresh_error_status(allow_from_computing=True)
-                        # Clear rule bar to prevent view_workspace_controller from re-processing
-                        self._rule_bar.setText("")
-                        return
-            count = self._table.selected_cell_count()
-            if count == 0:
-                return
-            if count > 1:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Single-cell only",
-                    f"You have {count} cells selected. Rule bar entry now only applies to one cell. Select a single cell and try again.",
-                )
-                return
-            keys_many = self._table.selected_cell_keys_many()
-            if text.startswith("="):
-                self._set_status_state("computing", "Computing…")
-                expr = text[1:]
-                try:
-                    for row_key, col_key in keys_many:
-                        self._execute_rule_for_cell(
-                            self._active_view_id, row_key=row_key, col_key=col_key, expression=expr
-                        )
-                except Exception as e:
-                    QtWidgets.QMessageBox.critical(self, "Rule error", str(e))
-                    # Rule failed to parse/apply; restore status based on
-                    # the current engine errors rather than a sticky generic
-                    # "Rule error".
-                    self._refresh_error_status(allow_from_computing=True)
-                    self._on_rules_changed()
+                count = self._table.selected_cell_count()
+                if count == 0:
                     return
-            else:
-                print(f"DEBUG: FALLTHROUGH to hard number insertion with text='{text}'")
-                val = text
-                print(f"DEBUG: raw val={val}")
-                self._set_status_state("computing", "Computing…")
-                for row_key, col_key in keys_many:
-                    result = self.session.execute(
-                        "set_cell_hardvalue",
-                        view_id=self._active_view_id,
-                        cell_ref={
-                            "kind": "ids",
-                            "row_key": row_key,
-                            "col_key": col_key,
-                        },
-                        value=val,
+                if count > 1:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Single-cell only",
+                        f"You have {count} cells selected. Rule bar entry now only applies to one cell. Select a single cell and try again.",
                     )
-                    if not result.success:
-                        raise RuntimeError(result.error or "set_cell_hardvalue failed")
-            self._table.reload(invalidate_tiles="data")
-            self._update_undo_redo_actions()
-            self._sync_rule_bar_from_current()
-            self._on_rules_changed()
-            self._refresh_error_status(allow_from_computing=True)
-            self._mark_dirty(True)
-            return
+                    return
+                keys_many = self._table.selected_cell_keys_many()
+                if text.startswith("="):
+                    expr = text[1:]
+                    try:
+                        for row_key, col_key in keys_many:
+                            self._execute_rule_for_cell(
+                                self._active_view_id, row_key=row_key, col_key=col_key, expression=expr
+                            )
+                    except Exception as e:
+                        QtWidgets.QMessageBox.critical(self, "Rule error", str(e))
+                        # Rule failed to parse/apply; restore status based on
+                        # the current engine errors rather than a sticky generic
+                        # "Rule error".
+                        self._refresh_error_status(allow_from_computing=True)
+                        self._on_rules_changed()
+                        return
+                else:
+                    print(f"DEBUG: FALLTHROUGH to hard number insertion with text='{text}'")
+                    val = text
+                    print(f"DEBUG: raw val={val}")
+                    for row_key, col_key in keys_many:
+                        result = self.session.execute(
+                            "set_cell_hardvalue",
+                            view_id=self._active_view_id,
+                            cell_ref={
+                                "kind": "ids",
+                                "row_key": row_key,
+                                "col_key": col_key,
+                            },
+                            value=val,
+                        )
+                        if not result.success:
+                            raise RuntimeError(result.error or "set_cell_hardvalue failed")
+                self._table.reload(invalidate_tiles="data")
+                self._update_undo_redo_actions()
+                self._sync_rule_bar_from_current()
+                self._on_rules_changed()
+                self._refresh_error_status(allow_from_computing=True)
+                self._mark_dirty(True)
+                return
+            finally:
+                self._status_manager.end(owner)
 
         idx = self._table.currentIndex()  # type: ignore[union-attr]
         text = self._rule_bar.text().strip()
@@ -7122,18 +7237,67 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def _on_set_rule_body(self) -> None:
         """Fallback menu action: prompt for a value or =rule body and apply to selection."""
-        if isinstance(self._table, MatrixGrid):
-            count = self._table.selected_cell_count()
-            if count == 0:
-                return
-            if count > 1:
-                QtWidgets.QMessageBox.warning(
+        owner = StatusOwner.recalc(self._next_status_owner_id())
+        self._status_manager.begin(owner, StatusState.CALCULATING)
+        try:
+            if isinstance(self._table, MatrixGrid):
+                count = self._table.selected_cell_count()
+                if count == 0:
+                    return
+                if count > 1:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Single-cell only",
+                        f"You have {count} cells selected. Set Rule now only applies to one cell. Select a single cell and try again.",
+                    )
+                    return
+                keys_many = self._table.selected_cell_keys_many()
+                text, ok = QtWidgets.QInputDialog.getText(
                     self,
-                    "Single-cell only",
-                    f"You have {count} cells selected. Set Rule now only applies to one cell. Select a single cell and try again.",
+                    "Set Value or Rule",
+                    "Enter a value or =rule to apply",
                 )
+                if not ok:
+                    return
+                text = text.strip()
+                is_rule = text.startswith("=") or "=" in text
+                if is_rule:
+                    expr = text[1:] if text.startswith("=") else text
+                    try:
+                        for row_key, col_key in keys_many:
+                            self._execute_rule_for_cell(
+                                self._active_view_id, row_key=row_key, col_key=col_key, expression=expr
+                            )
+                    except Exception as e:
+                        QtWidgets.QMessageBox.critical(self, "Rule error", str(e))
+                        self._refresh_error_status(allow_from_computing=True)
+                        self._on_rules_changed()
+                        return
+                else:
+                    val = text
+                    for row_key, col_key in keys_many:
+                        result = self.session.execute(
+                            "set_cell_hardvalue",
+                            view_id=self._active_view_id,
+                            cell_ref={
+                                "kind": "ids",
+                                "row_key": row_key,
+                                "col_key": col_key,
+                            },
+                            value=val,
+                        )
+                        if not result.success:
+                            raise RuntimeError(result.error or "set_cell_hardvalue failed")
+                self._table.reload(invalidate_tiles="data")
+                self._update_undo_redo_actions()
+                self._sync_rule_bar_from_current()
+                self._on_rules_changed()
+                self._refresh_error_status(allow_from_computing=True)
                 return
-            keys_many = self._table.selected_cell_keys_many()
+
+            idx = self._table.currentIndex()  # type: ignore[union-attr]
+            if not idx.isValid():
+                return
             text, ok = QtWidgets.QInputDialog.getText(
                 self,
                 "Set Value or Rule",
@@ -7145,7 +7309,6 @@ class MainWindow(QtWidgets.QMainWindow):
             is_rule = text.startswith("=") or "=" in text
             if is_rule:
                 expr = text[1:] if text.startswith("=") else text
-                self._set_status_state("computing", "Computing…")
                 try:
                     for row_key, col_key in keys_many:
                         self._execute_rule_for_cell(
@@ -7157,59 +7320,13 @@ class MainWindow(QtWidgets.QMainWindow):
                     self._on_rules_changed()
                     return
             else:
-                val = text
-                self._set_status_state("computing", "Computing…")
-                for row_key, col_key in keys_many:
-                    result = self.session.execute(
-                        "set_cell_hardvalue",
-                        view_id=self._active_view_id,
-                        cell_ref={
-                            "kind": "ids",
-                            "row_key": row_key,
-                            "col_key": col_key,
-                        },
-                        value=val,
-                    )
-                    if not result.success:
-                        raise RuntimeError(result.error or "set_cell_hardvalue failed")
-            self._table.reload(invalidate_tiles="data")
-            self._update_undo_redo_actions()
-            self._sync_rule_bar_from_current()
+                idx = self._table.currentIndex()  # type: ignore[union-attr]
+                self._current_tab.model.dataChanged.emit(idx, idx, [QtCore.Qt.ItemDataRole.DisplayRole])  # type: ignore[union-attr]
             self._on_rules_changed()
-            self._refresh_error_status(allow_from_computing=True)
-            return
-
-        idx = self._table.currentIndex()  # type: ignore[union-attr]
-        if not idx.isValid():
-            return
-        text, ok = QtWidgets.QInputDialog.getText(
-            self,
-            "Set Value or Rule",
-            "Enter a value or =rule to apply",
-        )
-        if not ok:
-            return
-        text = text.strip()
-        is_rule = text.startswith("=") or "=" in text
-        if is_rule:
-            expr = text[1:] if text.startswith("=") else text
-            self._set_status_state("computing", "Computing…")
-            try:
-                for row_key, col_key in keys_many:
-                    self._execute_rule_for_cell(
-                        self._active_view_id, row_key=row_key, col_key=col_key, expression=expr
-                    )
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(self, "Rule error", str(e))
-                self._refresh_error_status(allow_from_computing=True)
-                self._on_rules_changed()
-                return
-        else:
-            idx = self._table.currentIndex()  # type: ignore[union-attr]
-            self._current_tab.model.dataChanged.emit(idx, idx, [QtCore.Qt.ItemDataRole.DisplayRole])  # type: ignore[union-attr]
-        self._on_rules_changed()
-        self._sync_rule_bar_from_current()
-        self._refresh_error_status()
+            self._sync_rule_bar_from_current()
+            self._refresh_error_status()
+        finally:
+            self._status_manager.end(owner)
 
     @QtCore.Slot()
     def _on_copy(self) -> None:
@@ -7217,7 +7334,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self.is_remote:
             # cell_range query does not support rectangular TSV export yet.
-            self._set_status_state("error", "Copy not supported in remote mode")
+            self._flash_status_message("Copy not supported in remote mode")
             return
         sm = self._table.selectionModel()  # type: ignore[union-attr]
         if sm is None:
@@ -7563,8 +7680,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._restore_cell_selection(selected_cell)
             self._mark_dirty(True)
             self._after_mutation_enqueue_recompute()
-            if not getattr(self, '_deferred_recalc_in_progress', False):
-                self._set_status_state("ready", f"Undone: {desc}" if desc else "Undone")
+            if desc:
+                logger.info("Undone: %s", desc)
 
     @QtCore.Slot()
     def _on_redo(self) -> None:
@@ -7581,8 +7698,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._restore_cell_selection(selected_cell)
             self._mark_dirty(True)
             self._after_mutation_enqueue_recompute()
-            if not getattr(self, '_deferred_recalc_in_progress', False):
-                self._set_status_state("ready", f"Redone: {desc}" if desc else "Redone")
+            if desc:
+                logger.info("Redone: %s", desc)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         """Handle events for the rule bar and other watched objects.
@@ -7723,10 +7840,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def _switch_to_engine(self, engine_type: str) -> None:
         """Perform the actual engine switch."""
         if self.is_remote:
-            self._set_status_state("error", "Engine switch not supported in remote mode")
+            self._flash_status_message("Engine switch not supported in remote mode")
             return
-        self._set_status_state("computing", f"Switching to {engine_type.capitalize()}...")
-
+        owner = StatusOwner.load(self._next_status_owner_id())
+        self._status_manager.begin(owner, StatusState.LOADING)
         try:
             # Preserve current selection for restoration
             selected_cell = self._get_current_cell_selection()
@@ -7761,17 +7878,19 @@ class MainWindow(QtWidgets.QMainWindow):
             if selected_cell:
                 self._restore_cell_selection(selected_cell)
 
-            self._set_status_state("ready", "Switched to Python engine")
+            logger.info("Switched to %s engine", engine_type)
 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
                 self, "Engine Switch Failed", f"Failed to switch engine:\n{str(e)}"
             )
-            self._set_status_state("error", "Engine switch failed")
+            logger.error("Engine switch failed: %s", e)
             # Revert to current engine in UI
             current = self._get_current_engine_type()
             # Engine indicator removed; just ensure menu checkbox is correct
             self._actions.act_engine_python.setChecked(current == "python")
+        finally:
+            self._status_manager.end(owner)
 
     def _update_engine_indicator(self, engine_type: str) -> None:
         """Update the engine menu checkbox (indicator widget removed)."""

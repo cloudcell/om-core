@@ -68,7 +68,7 @@ class EditableRuleRow(QFrame):
         # Only create layout once - use VBox for two-line layout
         if self.layout() is None:
             main_layout = QVBoxLayout(self)
-            main_layout.setContentsMargins(0, 0, 0, 0)
+            main_layout.setContentsMargins(0, 3, 0, 3)
             main_layout.setSpacing(0)
 
             # Line 1: Rule body content (HBox) with line number
@@ -88,13 +88,13 @@ class EditableRuleRow(QFrame):
 
             # Line 2: Metadata
             self.meta_line = QWidget()
-            meta_layout = QHBoxLayout(self.meta_line)
-            meta_layout.setContentsMargins(28, 0, 8, 4)
-            meta_layout.setSpacing(6)
+            self.meta_layout = QHBoxLayout(self.meta_line)
+            self.meta_layout.setContentsMargins(28, 2, 8, 2)
+            self.meta_layout.setSpacing(6)
 
             self.meta_label = QLabel()
             self.meta_label.setStyleSheet("color: #9CA3AF; font-size: 11px;")
-            meta_layout.addWidget(self.meta_label, stretch=1)
+            self.meta_layout.addWidget(self.meta_label, stretch=1)
             main_layout.addWidget(self.meta_line)
 
         # Set metadata text
@@ -253,8 +253,27 @@ class EditableRuleRow(QFrame):
         width = label.width()
         if width <= 0:
             return
+        # Compute heights without the previous minimumHeight influencing the
+        # result, because QLabel::heightForWidth returns at least the current
+        # minimumHeight once it has been set.
+        old_min = label.minimumHeight()
+        label.setMinimumHeight(0)
         target_height = label.heightForWidth(width)
-        if target_height > 0 and label.minimumHeight() != target_height:
+        natural_height = label.heightForWidth(100000)
+
+        # Use comfortable margins for a single-line rule, but tighten the bar
+        # when the expression wraps so multi-line rows do not look bloated.
+        is_wrapped = target_height > natural_height + 4
+        if is_wrapped != getattr(self, "_is_wrapped", False):
+            self._is_wrapped = is_wrapped
+            if is_wrapped:
+                self.row_layout.setContentsMargins(4, 1, 8, 0)
+                self.meta_layout.setContentsMargins(28, 0, 8, 1)
+            else:
+                self.row_layout.setContentsMargins(4, 4, 8, 2)
+                self.meta_layout.setContentsMargins(28, 2, 8, 2)
+
+        if target_height > 0 and old_min != target_height:
             label.setMinimumHeight(target_height)
 
     def setup_edit_mode(self):
@@ -303,24 +322,38 @@ class EditableRuleRow(QFrame):
         self._update_editor_height()
         
         # Save/cancel buttons
-        save_btn = QPushButton()
-        save_btn.setFixedSize(20, 20)
-        save_btn.setIcon(QIcon(self._load_svg_icon("check")))
-        save_btn.setIconSize(QPixmap(14, 14).size())
+        save_btn = QPushButton("✓")
+        save_btn.setFixedSize(22, 22)
+        save_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        save_btn.setToolTip("Save")
         save_btn.setStyleSheet("""
-            QPushButton { background-color: #6B7280; border: none; border-radius: 3px; }
-            QPushButton:hover { background-color: #4B5563; }
+            QPushButton {
+                color: white;
+                background-color: #22C55E;
+                border: none;
+                border-radius: 3px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #16A34A; }
         """)
         save_btn.clicked.connect(self.save_edit)
         self.row_layout.addWidget(save_btn)
 
-        cancel_btn = QPushButton()
-        cancel_btn.setFixedSize(20, 20)
-        cancel_btn.setIcon(QIcon(self._load_svg_icon("x")))
-        cancel_btn.setIconSize(QPixmap(14, 14).size())
+        cancel_btn = QPushButton("✕")
+        cancel_btn.setFixedSize(22, 22)
+        cancel_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        cancel_btn.setToolTip("Cancel")
         cancel_btn.setStyleSheet("""
-            QPushButton { background-color: #9CA3AF; border: none; border-radius: 3px; }
-            QPushButton:hover { background-color: #6B7280; }
+            QPushButton {
+                color: white;
+                background-color: #EF4444;
+                border: none;
+                border-radius: 3px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #DC2626; }
         """)
         cancel_btn.clicked.connect(self.cancel_edit)
         self.row_layout.addWidget(cancel_btn)
@@ -361,17 +394,26 @@ class EditableRuleRow(QFrame):
     def save_edit(self):
         """Save the edited rule body."""
         new_text = self.editor.toPlainText()
+        original_text = None
+        if self.rule_body.lhs:
+            original_text = f"{self.rule_body.lhs} = {self.rule_body.rhs}"
+
+        changed = True
         if " = " in new_text:
             lhs, rhs = new_text.split(" = ", 1)
-            self.rule_body.lhs = lhs.strip()
-            self.rule_body.rhs = rhs.strip()
-            
+            lhs = lhs.strip()
+            rhs = rhs.strip()
+            if original_text is not None:
+                changed = new_text.strip() != original_text.strip()
+            self.rule_body.lhs = lhs
+            self.rule_body.rhs = rhs
+
         parent = self.parent()
         while parent and not hasattr(parent, 'end_row_edit'):
             parent = parent.parent()
         if parent and hasattr(parent, 'end_row_edit'):
-            parent.end_row_edit(self)
-            
+            parent.end_row_edit(self, cancelled=not changed)
+
         self.is_editing = False
         self.clear_layout()
         self.setup_display_mode()
@@ -382,15 +424,19 @@ class EditableRuleRow(QFrame):
         while parent and not hasattr(parent, 'end_row_edit'):
             parent = parent.parent()
         if parent and hasattr(parent, 'end_row_edit'):
-            parent.end_row_edit(self)
-            
+            parent.end_row_edit(self, cancelled=True)
+
         self.is_editing = False
         self.clear_layout()
         self.setup_display_mode()
-        
+
     def eventFilter(self, obj, event):
-        """Handle Enter/Esc/Alt+Enter in the editor."""
+        """Handle Enter/Esc/Alt+Enter and focus loss in the editor."""
         if obj == self.editor and self.is_editing:
+            if event.type() == event.Type.FocusOut:
+                # Clicking outside the editor (e.g. on the grid) abandons the edit.
+                self.cancel_edit()
+                return True
             if event.type() == event.Type.KeyPress:
                 key = event.key()
                 if key == Qt.Key.Key_Return:
