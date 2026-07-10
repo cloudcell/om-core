@@ -544,6 +544,7 @@ class ViewTab(QtWidgets.QWidget):
             return
         t1 = time.perf_counter()
         print(f"[DROP-ROW] command returned after {(t1-t0)*1000:.1f} ms")
+        self._rebuild_bars()
         t2 = time.perf_counter()
         self.workspace_changed.emit()
         t3 = time.perf_counter()

@@ -46,6 +46,11 @@ class CalculationCancelledError(Exception):
     pass
 
 
+class SnapshotInvariantError(Exception):
+    """Raised when the read-only snapshot path observes an invalid engine state."""
+    pass
+
+
 class FormatError(Exception):
     """Base class for all format-related errors."""
 

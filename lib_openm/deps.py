@@ -55,6 +55,12 @@ class DependencyGraph:
         self._reverse_edges.pop(node, None)
         self._dirty.discard(node)
 
+    def remove_nodes_with_prefix(self, prefix: str) -> None:
+        """Remove all nodes whose keys start with ``prefix``."""
+        for key in list(self._nodes.keys()):
+            if key.startswith(prefix):
+                self.remove_node(key)
+
     def nodes(self) -> Iterator[Node]:
         return iter(self._nodes.values())
 

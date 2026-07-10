@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from .message_bus import MessageEnvelope, get_message_bus
 from .executor import ExecutionResult, ExecutionStatus, get_executor
@@ -204,7 +207,15 @@ class SessionGateway:
             query_type=query_type,
             query_params=params,
         )
-        return result.data if result.success else None
+        if result.success:
+            return result.data
+        logger.warning(
+            "SessionGateway query failed: query_type=%s session_id=%s error=%s",
+            query_type,
+            session_id,
+            result.error,
+        )
+        return None
 
     def create_session(
         self,

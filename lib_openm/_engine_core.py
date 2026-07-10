@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Optional, Iterable
 
-from lib_contracts.types import CircularReferenceError, RuleValidationError, CalculationCancelledError
+from lib_contracts.types import CircularReferenceError, RuleValidationError, CalculationCancelledError, SnapshotInvariantError
 from lib_openm.rule_eval import CubeResolver, RuleEvaluator, parse_rule_target
 from lib_openm.rule_eval.utils import CellError
 from lib_openm.model import (
@@ -122,6 +122,23 @@ class CellValue:
     explain: Explain
 
 
+@dataclass(frozen=True)
+class CellMeta:
+    """Read-only metadata for a cell, used by the snapshot path.
+
+    This structure intentionally carries no evaluated value. It is produced by
+    ``engine.resolve_cell_meta`` without triggering rule evaluation or dependency
+    tracking mutations.
+    """
+
+    source: str          # "input" | "rule" | "override" | "empty"
+    has_rule: bool       # True if a rule covers this address
+    is_override: bool    # True if user hardvalue overrides the rule
+    is_dirty: bool       # True if dependency graph marks this node dirty
+    is_tracked: bool     # True if dependency edges have been recorded for this node
+    error: str | None    # evaluation error code, if the cached value is a CellError
+
+
 class _EngineCore:
     """Public API layer over the model.
 
@@ -142,6 +159,7 @@ class _EngineCore:
         self._thread_eval_state = threading.local()
         self._eval_strict_mode = False
         self._dep_tracking_enabled = True  # Enable by default for proper recalculation
+        self._generation = 0  # Global workspace-session generation for async tile consistency
         self._dep_metrics: dict[str, int] = {
             "slice_hits": 0,
             "slice_misses": 0,
@@ -157,6 +175,8 @@ class _EngineCore:
         }
         self._on_dimension_item_renamed: Callable[[], None] | None = None
         self._on_dimension_renamed: Callable[[], None] | None = None
+        self._gui_ready = False
+        self._resolver_cache: dict[str, Any] = {}
         # Multithreaded recompute is OFF by default and must be opted into
         # explicitly via enable_multithread_recompute().  This keeps the
         # default engine serial, predictable, and safe for tests and benchmarks.
@@ -292,6 +312,9 @@ class _EngineCore:
         self._ws.rebuild_item_ref_index()
         # Track current pivot view for each cube (for rules like Cube::*.*)
         self._cube_pivot_view: dict[str, str] = {}
+        # Per-cube resolver cache to avoid rebuilding the closure-heavy resolver
+        # on every rule evaluation during bootstrap and recalculation.
+        self._resolver_cache: dict[str, Any] = {}
         # Per-view cache of computed CellValue keyed by addr to avoid recompute during a render pass.
         self._cell_cache: dict[tuple[str, str, tuple[str, ...]], CellValue] = {}
         self._slice_cache: dict[str, Any] = {}
@@ -327,6 +350,8 @@ class _EngineCore:
         # Scan existing rules for volatile functions (RAND, etc.)
         # This ensures rules loaded from file are properly tracked
         self._scan_all_rule_bodies_for_volatile()
+        # GUI readiness is gated on a successful dependency-graph bootstrap.
+        self._gui_ready = False
 
     def replace_workspace(self, ws: Any) -> None:
         """Replace the workspace and reset all derived engine state.
@@ -1330,6 +1355,14 @@ class _EngineCore:
             "mt_last_run_frontiers": 0,
             "mt_last_run_max_frontier": 0,
         }
+
+    def dirty_count(self) -> int:
+        """Return the number of dirty nodes currently in the dependency graph."""
+        return len(self._dep_graph.dirty_keys())
+
+    def has_dirty_nodes(self) -> bool:
+        """Return True if any dependency-graph node is currently dirty."""
+        return any(self._dep_graph.dirty_keys())
 
     def recompute_dirty_nodes(self, *, include_all: bool = False, max_nodes: int | None = None, mode: str | None = None) -> int:
         """Re-evaluate dirty dependency graph nodes.
@@ -4606,6 +4639,17 @@ class _EngineCore:
         # must be rebuilt before the next rule lookup.
         self._ws._invalidate_rule_index()
 
+        # The dependency graph nodes for this cube are keyed by the old
+        # dimensionality and will no longer match the new addresses. Remove
+        # them and re-evaluate the cube's rule cells so the snapshot path
+        # can read clean, tracked values across the new dimension.
+        self._dep_graph.remove_nodes_with_prefix(f"cell::{cube_id}::")
+        self._tracked_nodes = {
+            k for k in self._tracked_nodes if not k.startswith(f"cell::{cube_id}::")
+        }
+        self._cell_cache.clear()
+        self._bootstrap_dependency_graph(only_missing=True)
+
     def analyze_detach_dimension_from_cube(self, cube_id: str, dim_id: str) -> dict[str, Any]:
         """Analyze the impact of detaching a dimension from a cube.
 
@@ -4795,6 +4839,19 @@ class _EngineCore:
         # Dimension count changed and rules were updated; stale cached masks
         # must be rebuilt before the next rule lookup.
         self._ws._invalidate_rule_index()
+
+        # The dependency graph nodes for this cube are keyed by the old
+        # dimensionality and will no longer match the new addresses. Remove them
+        # so stale nodes do not cause SnapshotInvariantError, and clear caches so
+        # rule cells are re-evaluated on next access with the updated dimensionality.
+        # We intentionally do NOT run a full bootstrap here; detach is expected to
+        # delete data referencing the removed dimension and leave the cube empty
+        # until a user access or recalculation triggers evaluation.
+        self._dep_graph.remove_nodes_with_prefix(f"cell::{cube_id}::")
+        self._tracked_nodes = {
+            k for k in self._tracked_nodes if not k.startswith(f"cell::{cube_id}::")
+        }
+        self._cell_cache.clear()
 
         print(f"[DEBUG detach_dim END] cube.data={len(cube.data)}, overrides={len(cube.user_override_addrs) if hasattr(cube, 'user_override_addrs') else 'N/A'}")
 
@@ -5599,6 +5656,45 @@ class _EngineCore:
                 key.append((999, item_id))
         return tuple(key)
 
+    def _extract_rule_cube_refs(
+        self, rule: Any
+    ) -> tuple[set[str], bool]:
+        """Return (cross_cube_refs, has_same_cube_ref) for a rule expression.
+
+        Cross-cube references (e.g. ``Cube::[...]`` or ``Cube::Dim.Item``) are
+        returned as a set of cube IDs. Same-cube references (refs without a cube
+        qualifier) are not returned as IDs, but the boolean flag is set so the
+        caller can order the rule after other rules in the same cube.
+        """
+        ws = self._ws
+        cube_names = {c.name.lower() for c in ws.cubes.values()}
+        cross_refs: set[str] = set()
+        has_same_cube_ref = False
+        try:
+            from lib_openm.rule_eval.tokenizer import _tokenise, _TT_REF
+
+            tokens = _tokenise(rule.expression.strip())
+            for t in tokens:
+                if t.kind == _TT_REF:
+                    parts = t.value.split(":", 1)
+                    if len(parts) == 2:
+                        name = parts[0].strip()
+                        if name.lower() in cube_names:
+                            # Cross-cube reference; find the cube ID by name.
+                            cube_id = next(
+                                c.id for c in ws.cubes.values() if c.name.lower() == name.lower()
+                            )
+                            cross_refs.add(cube_id)
+                        else:
+                            # Same-cube reference (e.g., Dim:Item or Dim.Item).
+                            has_same_cube_ref = True
+                    else:
+                        # Bare reference token without a cube qualifier.
+                        has_same_cube_ref = True
+        except (ValueError, TypeError):
+            pass
+        return cross_refs, has_same_cube_ref
+
     def _bootstrap_dependency_graph(self, only_missing: bool = False) -> int:
         """Evaluate only cells that must exist in the dependency graph.
 
@@ -5614,15 +5710,67 @@ class _EngineCore:
         Returns the total number of target cells evaluated.
         """
         total_evaluated = 0
-        for cube in self._ws.cubes.values():
-            targets: set[tuple[str, ...]] = set()
+        cube_list = list(self._ws.cubes.values())
+        cube_idx = {c.id: i for i, c in enumerate(cube_list)}
 
-            # 1. Hardvalues
+        # 1. Build cube-level dependency graph from cross-cube references in rules.
+        cube_refs: dict[str, set[str]] = {c.id: set() for c in cube_list}
+        rule_cross_refs: dict[str, set[str]] = {}
+        rule_same_cube_ref: dict[str, bool] = {}
+        for cube in cube_list:
+            for rid in self._ws._cube_ordered_rule_ids(cube.id):
+                rule = self._ws.rules[rid]
+                cross_refs, has_same = self._extract_rule_cube_refs(rule)
+                rule_cross_refs[rule.id] = cross_refs
+                rule_same_cube_ref[rule.id] = has_same
+                cube_refs[cube.id].update(cross_refs)
+
+        # 2. Compute cube depths: a cube is deeper than any earlier cube it references.
+        # This follows the workspace order as a hint, which is usually inputs-first.
+        cube_depths: dict[str, int] = {c.id: 0 for c in cube_list}
+        for cube in cube_list:
+            for ref in cube_refs[cube.id]:
+                if ref in cube_idx and cube_idx[ref] < cube_idx[cube.id]:
+                    cube_depths[cube.id] = max(cube_depths[cube.id], cube_depths[ref] + 1)
+
+        # 3. Compute per-rule external depth from the deepest external cube it references.
+        external_rule_depths: dict[str, int] = {}
+        for cube in cube_list:
+            for rid in self._ws._cube_ordered_rule_ids(cube.id):
+                rule = self._ws.rules[rid]
+                cross_refs = rule_cross_refs[rule.id]
+                external_refs = {r for r in cross_refs if r != cube.id}
+                if external_refs:
+                    external_rule_depths[rule.id] = max(cube_depths[r] for r in external_refs) + 1
+                else:
+                    external_rule_depths[rule.id] = 0
+
+        # 4. Rules that reference other cells in the same cube must be evaluated after
+        # all externally-referencing rules in that cube, so the referenced value exists.
+        rule_depths: dict[str, int] = {}
+        for cube in cube_list:
+            cube_external_max = 0
+            for rid in self._ws._cube_ordered_rule_ids(cube.id):
+                rule = self._ws.rules[rid]
+                cube_external_max = max(cube_external_max, external_rule_depths[rule.id])
+            for rid in self._ws._cube_ordered_rule_ids(cube.id):
+                rule = self._ws.rules[rid]
+                if rule_same_cube_ref.get(rule.id, False):
+                    rule_depths[rule.id] = cube_external_max + 1
+                else:
+                    rule_depths[rule.id] = external_rule_depths[rule.id]
+
+        # 5. Collect all target cells across all cubes with their topological depth.
+        all_targets: list[tuple[int, int, tuple, Cube, Any, tuple[str, ...]]] = []
+        for cube in cube_list:
+            targets: set[tuple[str, ...]] = set()
+            addr_to_rule: dict[tuple[str, ...], Any] = {}
+
+            # Hardvalues
             for addr in cube.user_override_addrs:
                 targets.add(addr)
 
-            # 2. Rule-covered addresses (expand each rule's mask)
-            # Use per-cube ordered rule index to avoid scanning all rules.
+            # Rule-covered addresses (expand each rule's mask)
             cube_rule_ids = self._ws._cube_ordered_rule_ids(cube.id)
             cube_rule_masks = self._ws._cube_rule_masks.get(cube.id, []) if self._ws._cube_rule_masks is not None else []
             for idx, rid in enumerate(cube_rule_ids):
@@ -5633,6 +5781,7 @@ class _EngineCore:
                 wildcard_dims = [i for i, m in enumerate(mask) if m is None]
                 if not wildcard_dims:
                     targets.add(mask)
+                    addr_to_rule[mask] = rule
                 else:
                     item_lists = [
                         [item.id for item in self._ws.dimensions[cube.dimension_ids[dim_idx]].items]
@@ -5642,25 +5791,33 @@ class _EngineCore:
                         addr = list(mask)
                         for dim_idx, item_id in zip(wildcard_dims, combo):
                             addr[dim_idx] = item_id
-                        targets.add(tuple(addr))
+                        taddr = tuple(addr)
+                        targets.add(taddr)
+                        addr_to_rule[taddr] = rule
 
-            # 3. Evaluate each target cell once with tracking enabled.
-            # Sort by item index so order is deterministic across workspaces.
-            sorted_targets = sorted(targets, key=lambda a: self._addr_sort_key(cube, a))
-            old_tracking = self._dep_tracking_enabled
-            self._dep_tracking_enabled = True
-            try:
-                for addr in sorted_targets:
-                    if only_missing:
-                        # Skip cells already computed and tracked.
-                        if cube.get(addr) is not None:
-                            node_key = self._cell_node_key(cube.id, addr)
-                            if self._dep_graph.has_precedents(node_key):
-                                continue
-                    self._get_cell_by_addr(cube, addr)
-                    total_evaluated += 1
-            finally:
-                self._dep_tracking_enabled = old_tracking
+            for addr in targets:
+                rule = addr_to_rule.get(addr)
+                if rule is not None and cube.is_user_override(addr):
+                    rule = None
+                depth = rule_depths.get(rule.id, 0) if rule is not None else 0
+                all_targets.append((depth, cube_idx[cube.id], self._addr_sort_key(cube, addr), cube, rule, addr))
+
+        # 5. Evaluate in topological order: depth, then cube order, then address order.
+        all_targets.sort(key=lambda t: (t[0], t[1], t[2]))
+        old_tracking = self._dep_tracking_enabled
+        self._dep_tracking_enabled = True
+        try:
+            for depth, idx, sort_key, cube, rule, addr in all_targets:
+                if only_missing:
+                    # Skip cells already computed and tracked.
+                    if cube.get(addr) is not None:
+                        node_key = self._cell_node_key(cube.id, addr)
+                        if self._dep_graph.has_precedents(node_key):
+                            continue
+                self._get_cell_by_addr(cube, addr, rule=rule)
+                total_evaluated += 1
+        finally:
+            self._dep_tracking_enabled = old_tracking
 
         return total_evaluated
 
@@ -5720,10 +5877,68 @@ class _EngineCore:
             self._calc_in_progress = False
             self._calc_lock.release()
 
+    def bootstrap_dependency_graph(self) -> dict[str, Any]:
+        """Fully build the dependency graph on workspace load.
+
+        Evaluates every hardvalue and rule-covered cell once with tracking
+        enabled so the GUI can paint read-only snapshots without evaluating
+        rules. Bumps the workspace generation to 1.
+
+        Returns a dict with the number of cells evaluated and the duration.
+        """
+        t0 = time.perf_counter()
+        evaluated = self._bootstrap_dependency_graph(only_missing=False)
+        self.bump_generation()
+        self._gui_ready = True
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        self._dep_metrics["bootstrap_cells"] = evaluated
+        self._dep_metrics["bootstrap_ms"] = int(dt_ms)
+        return {
+            "evaluated": evaluated,
+            "duration_ms": dt_ms,
+        }
+
     def _make_resolver(self, cube: Cube) -> CubeResolver:
         """Build a CubeResolver bound to this workspace and cube."""
+        cached = self._resolver_cache.get(cube.id)
+        if cached is not None:
+            return cached
         ws = self._ws
         engine_ref = self
+
+        # Precompute workspace-wide case-insensitive lookups to avoid repeated str.lower().
+        cube_name_lower_to_cube = {c.name.lower(): c for c in ws.cubes.values()}
+        dim_name_lower_to_dim = {d.name.lower(): d for d in ws.dimensions.values()}
+        dim_item_name_to_id_lower: dict[str, dict[str, str]] = {}
+        dim_item_id_set: dict[str, set[str]] = {}
+        for d in ws.dimensions.values():
+            name_map: dict[str, str] = {}
+            for it in d.items:
+                name_map[it.name.lower()] = it.id
+            dim_item_name_to_id_lower[d.id] = name_map
+            dim_item_id_set[d.id] = {it.id for it in d.items}
+
+        # Precompute source-cube slot maps for cross-cube address seeding.
+        source_id_to_slot_full = {dim_id: idx for idx, dim_id in enumerate(cube.dimension_ids)}
+        source_name_to_slot_full: dict[str, int] = {}
+        for idx, dim_id in enumerate(cube.dimension_ids):
+            dim_obj = ws.dimensions.get(dim_id)
+            if dim_obj is not None:
+                source_name_to_slot_full[dim_obj.name.lower()] = idx
+        source_id_to_slot_no_at = source_id_to_slot_full
+        source_name_to_slot_no_at = source_name_to_slot_full
+        if "@" in cube.dimension_ids:
+            non_at_dim_ids = [dim_id for dim_id in cube.dimension_ids if dim_id != "@"]
+            source_id_to_slot_no_at = {
+                dim_id: idx for idx, dim_id in enumerate(non_at_dim_ids)
+            }
+            source_name_to_slot_no_at = {
+                dim_obj.name.lower(): idx
+                for idx, dim_id in enumerate(non_at_dim_ids)
+                for dim_obj in [ws.dimensions.get(dim_id)]
+                if dim_obj is not None
+            }
+        source_name_lower = cube.name.lower()
 
         def _select_cube_and_seed_addr(
             cube_name: str | None,
@@ -5756,7 +5971,7 @@ class _EngineCore:
                         addr_vec.insert(0, at_dim.items[0].id)
                 return cube, addr_vec
 
-            if cube_name.lower() == cube.name.lower():
+            if cube_name.lower() == source_name_lower:
                 addr_vec = list(base_addr)
                 if len(addr_vec) < len(cube.dimension_ids) and "@" in cube.dimension_ids:
                     at_dim = ws.dimensions.get("@")
@@ -5764,26 +5979,18 @@ class _EngineCore:
                         addr_vec.insert(0, at_dim.items[0].id)
                 return cube, addr_vec
 
-            target_cube = next(
-                (c for c in ws.cubes.values() if c.name.lower() == cube_name.lower()),
-                None,
-            )
+            target_cube = cube_name_lower_to_cube.get(cube_name.lower())
             if target_cube is None:
                 raise KeyError(f"Unknown cube: {cube_name!r}")
 
-            # Precompute source cube slot lookup by dimension id and name for seeding.
-            # Always build maps, but handle shorter base_addr for backward compatibility.
-            id_to_slot: dict[str, int] = {}
-            name_to_slot: dict[str, int] = {}
-            # Skip @ dimension when building slot maps if base_addr is shorter (backward compat)
-            dims_to_map = cube.dimension_ids
+            # Pick precomputed source-cube slot maps. For shorter base_addr skip @
+            # so the remaining slots line up with the source address elements.
             if len(base_addr) < len(cube.dimension_ids) and "@" in cube.dimension_ids:
-                dims_to_map = [d for d in cube.dimension_ids if d != "@"]
-            for idx, dim_id in enumerate(dims_to_map):
-                id_to_slot[dim_id] = idx
-                dim_obj = ws.dimensions.get(dim_id)
-                if dim_obj is not None:
-                    name_to_slot[dim_obj.name.lower()] = idx
+                id_to_slot = source_id_to_slot_no_at
+                name_to_slot = source_name_to_slot_no_at
+            else:
+                id_to_slot = source_id_to_slot_full
+                name_to_slot = source_name_to_slot_full
 
             addr_vec: list[str] = []
             for dim_id in target_cube.dimension_ids:
@@ -5795,7 +6002,7 @@ class _EngineCore:
                     src_slot = name_to_slot.get(dim_obj.name.lower())
 
                 # For @ dimension with shorter address, use default; otherwise use src_slot if valid
-                if src_slot is not None and len(base_addr) == len(dims_to_map):
+                if src_slot is not None and len(base_addr) == len(id_to_slot):
                     addr_vec.append(base_addr[src_slot])
                     continue
 
@@ -5900,14 +6107,14 @@ class _EngineCore:
             if token == "*":
                 return [it.id for it in dim.items]
             token_lower = token.lower()
-            # First try to find by name
-            target_item = next((it for it in dim.items if it.name.lower() == token_lower), None)
-            if target_item is not None:
-                return [target_item.id]
-            # Also try to find by ID (in case item ID was passed directly)
-            target_item_by_id = next((it for it in dim.items if it.id == token), None)
-            if target_item_by_id is not None:
-                return [target_item_by_id.id]
+            # Fast lookup by precomputed name/id maps for this dimension.
+            name_map = dim_item_name_to_id_lower.get(dim.id)
+            if name_map is not None:
+                item_id = name_map.get(token_lower)
+                if item_id is not None:
+                    return [item_id]
+                if token in dim_item_id_set.get(dim.id, set()):
+                    return [token]
             return _find_outline_group_item_ids(dim, token_lower)
 
         def _label_for_slot(target_cube: Cube, seeded_addr: list[str], slot: int) -> str:
@@ -6622,17 +6829,36 @@ class _EngineCore:
                         axes.append([it.id for it in dim_obj.items])
 
                 axes_snapshot = [list(axis) for axis in axes]
+                _UNSET = object()  # sentinel for "not read via bulk fast path"
 
                 def _compute_sum() -> float | str:
                     compute_trace(f"SUM over {len(axes_snapshot)} axes, {target_cube.name}")
                     return _compute_sum_python()
-                
+
                 def _compute_sum_python() -> float | str:
                     total: float | str = 0.0
                     count = 0
+                    tracking = engine_ref._is_tracking_enabled()
+                    parent_key: str | None = None
+                    pending_precedents: dict[str, set[str]] | None = None
+                    if tracking:
+                        eval_context = engine_ref._thread_eval_context()
+                        if eval_context:
+                            parent_key = eval_context[-1]
+                            pending_precedents = engine_ref._thread_pending_precedents()
                     for raw_addr in itertools.product(*axes):
                         addr = tuple(raw_addr)
-                        v = engine_ref._get_cell_by_addr(target_cube, addr)
+                        v: Any = _UNSET
+                        if tracking and parent_key and pending_precedents is not None:
+                            node_key = engine_ref._cell_node_key(target_cube.id, addr)
+                            if (
+                                node_key in engine_ref._tracked_nodes
+                                and not engine_ref._dep_graph.is_dirty(node_key)
+                            ):
+                                pending_precedents.setdefault(parent_key, set()).add(node_key)
+                                v = target_cube.get(addr)
+                        if v is _UNSET:
+                            v = engine_ref._get_cell_by_addr(target_cube, addr)
                         count += 1
                         num = _coerce_num(v)
                         # Propagate error sentinels if any contributing cell is an error.
@@ -6783,14 +7009,34 @@ class _EngineCore:
 
                 def _compute_agg() -> float | str | type(NotImplemented):
                     return _compute_agg_python()
-                
+
                 def _compute_agg_python() -> float | str | type(NotImplemented):
+                    tracking = engine_ref._is_tracking_enabled()
+                    parent_key: str | None = None
+                    pending_precedents: dict[str, set[str]] | None = None
+                    if tracking:
+                        eval_context = engine_ref._thread_eval_context()
+                        if eval_context:
+                            parent_key = eval_context[-1]
+                            pending_precedents = engine_ref._thread_pending_precedents()
+
+                    def _read_cell(addr: tuple[str, ...]) -> Any:
+                        if tracking and parent_key and pending_precedents is not None:
+                            node_key = engine_ref._cell_node_key(target_cube.id, addr)
+                            if (
+                                node_key in engine_ref._tracked_nodes
+                                and not engine_ref._dep_graph.is_dirty(node_key)
+                            ):
+                                pending_precedents.setdefault(parent_key, set()).add(node_key)
+                                return target_cube.get(addr)
+                        return engine_ref._get_cell_by_addr(target_cube, addr)
+
                     # COUNTA counts all non-empty cells (text, numbers, etc.)
                     if fn == "COUNTA":
                         count = 0
                         for raw_addr in itertools.product(*axes):
                             addr = tuple(raw_addr)
-                            v = engine_ref._get_cell_by_addr(target_cube, addr)
+                            v = _read_cell(addr)
                             if v is not None and v != "":
                                 count += 1
                         return float(count)
@@ -6799,7 +7045,7 @@ class _EngineCore:
                     debug_count = 0
                     for raw_addr in itertools.product(*axes):
                         addr = tuple(raw_addr)
-                        v = engine_ref._get_cell_by_addr(target_cube, addr)
+                        v = _read_cell(addr)
                         # Debug: Check hardnumber status for first few values
                         if debug_count < 3 and fn in ("MIN", "MAX"):
                             is_hard = target_cube.is_user_override(addr)
@@ -6854,7 +7100,7 @@ class _EngineCore:
                                 f"Dynamic bound $<...> must resolve to a single cell; "
                                 f"wildcard not allowed in dimension {dim_name!r}"
                             )
-                        dim = next((d for d in ws.dimensions.values() if d.name.lower() == dim_name.lower()), None)
+                        dim = dim_name_lower_to_dim.get(dim_name.lower())
                         if dim is None:
                             continue
                         item_ids = _dimension_item_ids_for_name(dim, item_name)
@@ -6907,7 +7153,7 @@ class _EngineCore:
                     new_addr = aligned_addr
                 saw_seq_keyword = False
                 for dim_name, item_name in pairs:
-                    dim = next((d for d in ws.dimensions.values() if d.name.lower() == dim_name.lower()), None)
+                    dim = dim_name_lower_to_dim.get(dim_name.lower())
                     if dim is None:
                         raise KeyError(f"Unknown dimension: {dim_name!r}")
                     if dim.id not in target_cube.dimension_ids:
@@ -7903,10 +8149,23 @@ class _EngineCore:
         resolver = _Resolver()
         resolver._engine = engine_ref
         resolver._cube = cube
+        self._resolver_cache[cube.id] = resolver
         return resolver
 
-    def _get_cell_by_addr(self, cube: Cube, addr: tuple[str, ...]) -> Any:
-        """Low-level: get a cell value by raw address (no rule fan-out loop)."""
+    def _get_cell_by_addr(
+        self,
+        cube: Cube,
+        addr: tuple[str, ...],
+        *,
+        rule: Any | None = None,
+    ) -> Any:
+        """Low-level: get a cell value by raw address (no rule fan-out loop).
+
+        If *rule* is supplied, it is used instead of re-deriving the covering
+        rule via find_anchored_rule/find_rule. This is useful for callers that
+        already know the rule (e.g., the bootstrap expansion) and want to avoid
+        repeated lookup cost.
+        """
         # SINGLE NORMALIZATION POINT: Ensure full address internally
         addr = _normalize_addr_for_cube(cube, addr)
 
@@ -7932,6 +8191,20 @@ class _EngineCore:
             eval_context.append(node_key)
             if parent_key and parent_key != node_key:
                 pending_precedents.setdefault(parent_key, set()).add(node_key)
+            # Fast path: already evaluated and tracked, value is cached and not dirty,
+            # and either it is a hardvalue or its dependency edges are already recorded.
+            # Rule cells with no recorded edges must fall through so the existing
+            # needs_dep_record logic can force a re-evaluation to rebuild edges.
+            v = cube.get(addr)
+            if (
+                v is not None
+                and not isinstance(v, CellError)
+                and node_key in self._tracked_nodes
+                and not self._dep_graph.is_dirty(node_key)
+                and (cube.is_user_override(addr) or self._dep_graph.has_precedents(node_key))
+            ):
+                eval_context.pop()
+                return v
 
         def _commit_precedents(success: bool, had_rule_body: bool) -> None:
             if not tracking or node_key is None:
@@ -7968,9 +8241,14 @@ class _EngineCore:
                 eval_context.pop()
             return v
 
-        # Pre-check if this cell has a rule - needed for correct edge creation
-        has_rule_body = self._ws.find_anchored_rule(cube.id, addr) is not None
-        has_rule = self._ws.find_rule(cube.id, addr, cube.dimension_ids) is not None
+        # Pre-check if this cell has a rule - needed for correct edge creation.
+        # If the caller already supplied the rule, skip the lookup.
+        if rule is not None:
+            has_rule_body = True
+            has_rule = True
+        else:
+            has_rule_body = self._ws.find_anchored_rule(cube.id, addr) is not None
+            has_rule = self._ws.find_rule(cube.id, addr, cube.dimension_ids) is not None
 
         if has_rule_body or has_rule:
             had_rule_body = True  # Mark early so edge creation works even for cached values
@@ -8026,65 +8304,27 @@ class _EngineCore:
             raise CircularReferenceError(f"Circular reference at {(cube.id, addr)}")
         eval_stack.add(key)
         try:
-            anchored = self._ws.find_anchored_rule(cube.id, addr)
-            if anchored is None:
-                rule = self._ws.find_rule(cube.id, addr, cube.dimension_ids)
-                if rule is None:
-                    success = True
-                    # Always commit for non-rule cells when tracking.
-                    # Even empty cells must record the edge to their parent rule
-                    # so that future edits to this cell invalidate dependents.
-                    if tracking and node_key:
-                        _commit_precedents(success, had_rule_body)
-                    return v
-                resolver = self._make_resolver(cube)
-                t0 = time.perf_counter()
-                try:
-                    expr = self._normalize_expression(rule.expression)
-                    had_rule_body = True
-                    result = self._rule_evaluator.eval(expr, resolver=resolver, base_addr=addr)
-                    if isinstance(result, complex):
-                        result = CellError("#NUM!")
-                    if node_key is not None:
-                        self._recompute_counts[node_key] = self._recompute_counts.get(node_key, 0) + 1
-                    dt = time.perf_counter() - t0
-                    self._record_rule_eval_profile(expr, dt * 1000.0)
-                    if dt > SLOW_LOG_THRESHOLD and _DEBUG_ENGINE:
-                        print(f"[timing] rule eval {rule.id} at {addr}: {dt*1000:.1f} ms", flush=True)
-                    cube.set(addr, result)
-                    success = True
-                    # Commit precedents to record dependency edges for the rule
-                    if tracking and node_key:
-                        _commit_precedents(success, had_rule_body)
-                    return result
-                except ZeroDivisionError:
-                    err = CellError("#DIV/0!")
-                    cube.set(addr, err)
-                    success = True
-                    return err
-                except OverflowError:
-                    err = CellError("#NUM!")
-                    cube.set(addr, err)
-                    success = True
-                    return err
-                except CircularReferenceError:
-                    err = CellError("#CIRC!")
-                    cube.set(addr, err)
-                    success = True
-                    return err
-                except RuleValidationError:
-                    # Surface validation failures (e.g. invalid dynamic bounds)
-                    # to callers instead of mapping them to EXPRESSION!.
-                    raise
-                except Exception:
-                    err = CellError("#EXPRESSION!")
-                    cube.set(addr, err)
-                    success = True
-                    return err
+            if rule is not None:
+                # Caller supplied the rule; use it directly.
+                pass
+            else:
+                anchored = self._ws.find_anchored_rule(cube.id, addr)
+                if anchored is not None:
+                    rule = anchored
+                else:
+                    rule = self._ws.find_rule(cube.id, addr, cube.dimension_ids)
+            if rule is None:
+                success = True
+                # Always commit for non-rule cells when tracking.
+                # Even empty cells must record the edge to their parent rule
+                # so that future edits to this cell invalidate dependents.
+                if tracking and node_key:
+                    _commit_precedents(success, had_rule_body)
+                return v
             resolver = self._make_resolver(cube)
             t0 = time.perf_counter()
             try:
-                expr = self._normalize_expression(anchored.expression)
+                expr = self._normalize_expression(rule.expression)
                 had_rule_body = True
                 result = self._rule_evaluator.eval(expr, resolver=resolver, base_addr=addr)
                 if isinstance(result, complex):
@@ -8094,9 +8334,12 @@ class _EngineCore:
                 dt = time.perf_counter() - t0
                 self._record_rule_eval_profile(expr, dt * 1000.0)
                 if dt > SLOW_LOG_THRESHOLD and _DEBUG_ENGINE:
-                    print(f"[timing] cell rule eval {anchored.id} at {addr}: {dt*1000:.1f} ms", flush=True)
+                    print(f"[timing] rule eval {rule.id} at {addr}: {dt*1000:.1f} ms", flush=True)
                 cube.set(addr, result)
                 success = True
+                # Commit precedents to record dependency edges for the rule
+                if tracking and node_key:
+                    _commit_precedents(success, had_rule_body)
                 return result
             except ZeroDivisionError:
                 err = CellError("#DIV/0!")
@@ -8114,7 +8357,8 @@ class _EngineCore:
                 success = True
                 return err
             except RuleValidationError:
-                # Let validation errors escape for tests expecting them.
+                # Surface validation failures (e.g. invalid dynamic bounds)
+                # to callers instead of mapping them to EXPRESSION!.
                 raise
             except Exception:
                 err = CellError("#EXPRESSION!")
@@ -8148,6 +8392,67 @@ class _EngineCore:
         Raises ``CircularReferenceError`` for unresolvable cycles.
         """
         return self._get_cell_by_addr(cube, addr)
+
+    def resolve_cell_meta(self, cube: Cube, addr: tuple[str, ...]) -> CellMeta:
+        """Read-only metadata lookup for a cell.
+
+        Does not evaluate rules, record dependency edges, or mutate the engine.
+        """
+        addr = _normalize_addr_for_cube(cube, addr)
+        with self._cube_locks.setdefault(cube.id, threading.Lock()):
+            v = cube.get(addr)
+            is_override = cube.is_user_override(addr)
+            has_rule_body = self._ws.find_anchored_rule(cube.id, addr) is not None
+            has_rule = self._ws.find_rule(cube.id, addr, cube.dimension_ids) is not None
+            has_rule = has_rule_body or has_rule
+
+            if has_rule and is_override:
+                source = "override"
+            elif has_rule:
+                source = "rule"
+            elif is_override:
+                source = "override"
+            elif v is None:
+                source = "empty"
+            else:
+                source = "input"
+
+            error = v.code if isinstance(v, CellError) else None
+            node_key = self._cell_node_key(cube.id, addr)
+            is_dirty = self._dep_graph.is_dirty(node_key)
+            is_tracked = node_key in self._tracked_nodes
+            return CellMeta(
+                source=source,
+                has_rule=has_rule,
+                is_override=is_override,
+                is_dirty=is_dirty,
+                is_tracked=is_tracked,
+                error=error,
+            )
+
+    def get_cached_cell_value_by_addr(self, cube: Cube, addr: tuple[str, ...]) -> Any:
+        """Read-only value access from the cube cache.
+
+        Never evaluates rules, looks up rules, or touches the dependency graph.
+        """
+        addr = _normalize_addr_for_cube(cube, addr)
+        with self._cube_locks.setdefault(cube.id, threading.Lock()):
+            return cube.get(addr)
+
+    @property
+    def generation(self) -> int:
+        """Global generation counter for the workspace session."""
+        return self._generation
+
+    @property
+    def is_gui_ready(self) -> bool:
+        """True after the load-time dependency-graph bootstrap has completed."""
+        return getattr(self, "_gui_ready", False)
+
+    def bump_generation(self) -> int:
+        """Increment the workspace generation and return the new value."""
+        self._generation += 1
+        return self._generation
 
     def cell_value_for_view_rc(self, view_id: str, row: int, col: int) -> CellValue:
         # Defensive: clear any stale eval stack state
@@ -8443,6 +8748,12 @@ class _EngineCore:
                         result = self._rule_evaluator.eval(expr, resolver=resolver, base_addr=addr)
                         # Store the computed result in the cube so it persists
                         cube.set(addr, result)
+                        # Validation is effectively a recompute for this cell;
+                        # mark it tracked/clean so the read-only snapshot path
+                        # does not reject the freshly computed value.
+                        if self._dep_tracking_enabled and node_key is not None:
+                            self._tracked_nodes.add(node_key)
+                            self._dep_graph.clear_dirty(node_key)
                     except CircularReferenceError:
                         # Do not prevent the rule from being committed if it
                         # participates in a circular dependency; the runtime

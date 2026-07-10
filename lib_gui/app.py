@@ -45,7 +45,7 @@ def _outline_signature(nodes):
     """Return a cheap hashable signature of an outline tree.
 
     Used to detect outline mutations (item insertion, grouping, etc.)
-    between successive _do_deferred_recalculation calls.
+    between successive workspace-change handlers.
 
     Accepts only plain dict snapshots (DTOs), never engine domain objects.
     """
@@ -699,6 +699,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._workspace_windows: list[ViewWorkspaceWindow] = []
         self._recalculating = False  # Guard to prevent recursive signal cascades during F9
         self._cancel_requested = False  # Flag to cancel long-running calculations
+
+        # Async dirty recalculation state (Phase 3)
+        self._dirty_recompute_in_progress: bool = False
+        self._recompute_pending_again: bool = False
+        self._dirty_recompute_thread: QtCore.QThread | None = None
+        self._dirty_recompute_worker: RecalcWorker | None = None
 
         # Recalculation thread management
         self._recalc_thread: QtCore.QThread | None = None
@@ -2507,6 +2513,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_recalc_thread()
         
         self._recalculating = True
+        # Take ownership of the status indicator from any pending deferred
+        # recalculation poll so F9's ready state doesn't fight with it.
+        self._deferred_recalc_in_progress = False
         # Freeze UI - only Esc key works
         self._freeze_ui_for_calculation()
         self._set_status_state("computing", "Recalculating… (Esc to cancel)")
@@ -2582,12 +2591,12 @@ class MainWindow(QtWidgets.QMainWindow):
         row_index = {dim_id: i for i, dim_id in enumerate(view.get("row_dim_ids", []))}
         col_index = {dim_id: i for i, dim_id in enumerate(view.get("col_dim_ids", []))}
 
-        # Trigger visible-scope recalculation through command spine
+        # Trigger incremental dirty-scope recalculation through command spine
         t0 = time.perf_counter()
-        result = self.session.execute("run_recalculation", scope="visible")
+        result = self.session.execute("run_recalculation", scope="dirty")
         t1 = time.perf_counter()
         invalidated_count = len(row_keys) * len(col_keys)
-        print(f"[F9] Triggered visible recalculation in {(t1-t0)*1000:.1f}ms")
+        print(f"[F9] Triggered dirty recalculation in {(t1-t0)*1000:.1f}ms")
 
         # Refresh the active view to trigger re-evaluation of visible cells
         grid.reload(invalidate_tiles="data")
@@ -2694,6 +2703,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_status_state(self, state: str, text: str) -> None:
         if getattr(self, '_is_closing', False):
             return
+        # While a deferred recalculation is in progress, only errors and the
+        # explicit computing message may change the status indicator.  The
+        # deferred recalc poller clears the guard before it restores ready.
+        if state == "ready" and getattr(self, '_deferred_recalc_in_progress', False):
+            return
         if state == "ready" and self._status_state == "computing":
             elapsed = time.monotonic() - self._status_last_change
             if elapsed < 0.2:
@@ -2745,6 +2759,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if generation != self._status_generation + 1:
             return
+        if getattr(self, '_deferred_recalc_in_progress', False):
+            return
         if self._active_view_has_errors():
             detail = self._first_error_detail()
             self._set_status_state("error", detail if detail is not None else "Error")
@@ -2765,6 +2781,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Handle ui.status.update events from the GUIEventAdapter."""
         message = event.payload.get("message", "") if hasattr(event, "payload") else ""
         level = event.payload.get("level", "info") if hasattr(event, "payload") else "info"
+        if level != "error" and getattr(self, '_deferred_recalc_in_progress', False):
+            return
         self._set_status_state("error" if level == "error" else "ready", message)
 
     def _on_ui_refresh(self, event):
@@ -2891,6 +2909,8 @@ class MainWindow(QtWidgets.QMainWindow):
         payload = event.payload if hasattr(event, "payload") else {}
         level = payload.get("level", "ready")
         message = payload.get("message", "")
+        if level == "ready" and getattr(self, '_deferred_recalc_in_progress', False):
+            return
         self._set_status_state(level, message)
 
     def _on_profiler_start(self, event: Any) -> None:
@@ -3167,15 +3187,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._mark_dirty(True)
 
     def _on_rules_changed(self) -> None:
-        self._set_status_state("computing", "Computing…")
-        # Trigger recalculation of dirty nodes (dependent cells) before refreshing views
-        result = self.session.execute("run_recalculation", scope="all")
-        if result.success:
-            print("[RECALC] Recalculation completed after rule change")
         self._rule_panel.rebuild()
         for controller in self._iter_workspace_controllers():
-            controller.refresh_table()
             controller.rebuild_rule_panel()
+        self._after_mutation_enqueue_recompute()
         self._sync_rule_bar_from_current()
         self._sync_flow_panel_from_current()
         self._update_undo_redo_actions()
@@ -3280,8 +3295,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self._actions.act_redo.setEnabled(can_redo)
         self._actions.act_redo.setText(f"Redo {redo_desc}" if redo_desc else "Redo")
         
-        # Also update status bar to show what's undoable
-        if undo_desc:
+        # Keep status reserved for recalculation/ready/error state; don't
+        # overwrite the indicator with an undo hint while a deferred
+        # recalculation is still in progress (or the label already says so).
+        status_text = (
+            self._status_indicator.text().lower()
+            if self._status_indicator is not None
+            else ""
+        )
+        is_computing = (
+            getattr(self, '_deferred_recalc_in_progress', False)
+            or "computing" in status_text
+            or "recalculating" in status_text
+        )
+        if undo_desc and not is_computing:
             self._set_status_state("ready", f"Press Ctrl+Z to undo: {undo_desc}")
 
     def _update_copy_paste_actions(self) -> None:
@@ -3621,12 +3648,14 @@ class MainWindow(QtWidgets.QMainWindow):
         t0 = time.perf_counter()
         try:
             self._set_status_state("computing", "Computing…")
+            self._suppress_tile_fetches(True)
             self._dock_browser.rebuild()
             self._reload_active_view()
             for win in list(self._workspace_windows):
                 DEBUG_GUI and print(f"DEBUG _on_workspace_changed: reloading window {win._workspace_number if hasattr(win, '_workspace_number') else 'unknown'}")
                 win.controller.reload_active_view()
             self._rule_panel.rebuild()
+            self._after_mutation_enqueue_recompute()
             self._refresh_error_status(allow_from_computing=True)
         finally:
             logger.info("[MainWindow] workspace_changed done duration=%.3f ms", (time.perf_counter() - t0) * 1000)
@@ -3637,6 +3666,99 @@ class MainWindow(QtWidgets.QMainWindow):
         for win in list(self._workspace_windows):
             controllers.append(win.controller)
         return controllers
+
+    def _iter_matrix_grids(self):
+        """Yield every MatrixGrid across the main and secondary workspaces."""
+        from lib_gui_elements.matrix_grid import MatrixGrid
+        for controller in self._iter_workspace_controllers():
+            table = controller.active_table
+            if isinstance(table, MatrixGrid):
+                yield table
+
+    def _suppress_tile_fetches(self, suppressed: bool) -> None:
+        """Suppress or resume tile fetches on all visible grids."""
+        for grid in self._iter_matrix_grids():
+            grid.set_tile_fetch_suppressed(suppressed)
+
+    def _after_mutation_enqueue_recompute(self) -> None:
+        """After any model mutation, enqueue an async dirty recompute if needed."""
+        if self._dirty_recompute_in_progress:
+            self._recompute_pending_again = True
+            return
+        try:
+            result = self.session.query("diagnostics_dirty_count")
+            dirty_count = result.get("dirty_count", 0) if result else 0
+        except Exception as exc:
+            logger.warning("[MainWindow] dirty_count query failed: %s", exc)
+            dirty_count = 0
+        if dirty_count > 0:
+            self._start_dirty_recompute()
+        else:
+            self._deferred_recalc_in_progress = False
+            self._refresh_table()
+            self._suppress_tile_fetches(False)
+
+    def _start_dirty_recompute(self) -> None:
+        """Start a background dirty recalculation and suppress tile fetches."""
+        if self._dirty_recompute_in_progress:
+            return
+        self._dirty_recompute_in_progress = True
+        self._recompute_pending_again = False
+        self._deferred_recalc_in_progress = True
+        self._set_status_state("computing", "Calculating…")
+        self._suppress_tile_fetches(True)
+
+        self._dirty_recompute_thread = QtCore.QThread(self)
+        self._dirty_recompute_worker = RecalcWorker(self.session, scope="dirty")
+        self._dirty_recompute_worker.moveToThread(self._dirty_recompute_thread)
+
+        self._dirty_recompute_thread.started.connect(self._dirty_recompute_worker.run)
+        self._dirty_recompute_worker.result_ready.connect(self._on_dirty_recompute_result)
+        self._dirty_recompute_worker.error.connect(self._on_dirty_recompute_error)
+        self._dirty_recompute_worker.finished.connect(self._dirty_recompute_thread.quit)
+        self._dirty_recompute_worker.error.connect(self._dirty_recompute_thread.quit)
+
+        self._dirty_recompute_thread.start()
+
+    @QtCore.Slot(dict)
+    def _on_dirty_recompute_result(self, result: dict) -> None:
+        """Handle successful dirty recalculation result on the GUI thread."""
+        if not result.get("ok"):
+            self._on_dirty_recompute_error(result.get("error") or "Recompute failed")
+            return
+
+        generation = result.get("generation")
+
+        if self._recompute_pending_again:
+            self._recompute_pending_again = False
+            # The current worker has already quit; create a new one.
+            self._dirty_recompute_in_progress = False
+            self._start_dirty_recompute()
+            return
+
+        self._dirty_recompute_in_progress = False
+        self._deferred_recalc_in_progress = False
+        self._suppress_tile_fetches(False)
+        for grid in self._iter_matrix_grids():
+            if generation is not None:
+                grid.refresh_for_generation(generation)
+            else:
+                grid.reload(invalidate_tiles="data")
+        self._sync_rule_bar_from_current()
+        self._sync_flow_panel_from_current()
+        self._refresh_error_status(allow_from_computing=True)
+        self._set_status_state("ready", "Ready")
+
+    @QtCore.Slot(str)
+    def _on_dirty_recompute_error(self, error_msg: str) -> None:
+        """Handle dirty recalculation failure on the GUI thread."""
+        logger.error("[MainWindow] dirty recompute error: %s", error_msg)
+        self._dirty_recompute_in_progress = False
+        self._recompute_pending_again = False
+        self._deferred_recalc_in_progress = False
+        self._suppress_tile_fetches(False)
+        self._set_status_state("error", error_msg)
+        self._refresh_error_status(allow_from_computing=True)
 
     def _sync_view_state_to_session_store(self) -> None:
         """Sync runtime UI state (active cell, selection, scroll) to SessionStore.
@@ -3801,6 +3923,14 @@ class MainWindow(QtWidgets.QMainWindow):
             logger.info("[MainWindow] workspace_data_changed ignored (recalculating)")
             return
         logger.info("[MainWindow] workspace_data_changed")
+        # If a dirty recompute is already running, mark it pending again so
+        # the result handler starts a fresh pass before fetching tiles.
+        if getattr(self, '_dirty_recompute_in_progress', False):
+            self._recompute_pending_again = True
+            return
+        # Block status-bar overrides immediately; _do_deferred_recalculation
+        # will either keep this True (when dirty cells exist) or clear it.
+        self._deferred_recalc_in_progress = True
         # Defer recalculation to prevent UI freezing during header edits
         # Batch multiple rapid changes into a single recalculation
         if not hasattr(self, '_pending_recalc_timer'):
@@ -3817,67 +3947,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pending_recalc_timer.start(0)
 
     def _do_deferred_recalculation(self) -> None:
-        """Perform the actual recalculation after deferring."""
+        """Coalesce rapid workspace changes into a single async dirty recompute."""
         logger.info("[MainWindow] deferred recalculation start")
-        t0 = time.perf_counter()
-        # Skip synchronous full recalculation for normal data changes.
-        # Dirty / volatile cells already had their cached values cleared by
-        # the engine's _mark_node_and_dependents_dirty.  The upcoming tile
-        # fetch (triggered by refresh_table) will recompute visible cells
-        # lazily on the background thread, giving RAND() new values without
-        # freezing the GUI on large cubes.
-        self.session.execute("clear_cache", scope="cell")
-
-        # Detect outline mutations by comparing with signatures cached from
-        # the PREVIOUS _do_deferred_recalculation call.  (The old approach
-        # snapped item counts at the start of this method, but mutations have
-        # already happened before the deferred timer fires, so both "before"
-        # and "after" counts were identical.)
-        last_sigs = getattr(self, '_last_outline_signatures', {})
-        # On first call last_sigs is empty; every dim would appear changed.
-        # Treat first call as no-change so we only react to actual mutations.
-        outline_changed = False
-        changed_dim = None
-        if last_sigs:
-            for dim in self.workspace_read_model.list_dimension_dtos(include_system=False):
-                current_sig = _outline_signature(dim.get("outline", []))
-                if last_sigs.get(dim.get("id")) != current_sig:
-                    outline_changed = True
-                    changed_dim = dim.get("name", dim.get("id"))
-                    break
-        else:
-            print(f"DEBUG _do_deferred_recalculation: first call, last_sigs empty, dims={len(list(self.workspace_read_model.list_dimension_dtos(include_system=False)))}")
-        print(f"DEBUG _do_deferred_recalculation: outline_changed={outline_changed} changed_dim={changed_dim} last_sigs_len={len(last_sigs)}")
-
-        # Cache signatures for the next comparison
-        self._last_outline_signatures = {
-            dim.get("id"): _outline_signature(dim.get("outline", []))
-            for dim in self.workspace_read_model.list_dimension_dtos(include_system=False)
-        }
-
-        if outline_changed:
-            result2 = self.session.execute("run_recalculation", scope="all")
-            if result2.success:
-                print("[RECALC] Recalculation completed after outline change")
-                self.session.execute("clear_cache", scope="cell")
-
-        self._rule_panel.rebuild()
-        for controller in self._iter_workspace_controllers():
-            if outline_changed:
-                controller.refresh_all_views()
-            else:
-                controller.refresh_table()
-            controller.rebuild_rule_panel()  # Rebuild rule panels in all windows
-        print("DEBUG _do_deferred_recalculation: syncing main window rule bar")
-        self._sync_rule_bar_from_current()
-        self._sync_flow_panel_from_current()
-        self._refresh_error_status(allow_from_computing=True)
-        # Stats must refresh after cell values change, even when selection
-        # stayed on the same cell (selection_changed does not fire).
-        self._update_selection_stats()
-        # Mark as dirty when data changes
+        self._after_mutation_enqueue_recompute()
+        # The file has changed even if no engine nodes are currently dirty.
         self._mark_dirty(True)
-        logger.info("[MainWindow] deferred recalculation done outline_changed=%s duration=%.3f ms", outline_changed, (time.perf_counter() - t0) * 1000)
+        logger.info("[MainWindow] deferred recalculation done")
 
     @QtCore.Slot()
     def _on_new_workspace(self) -> None:
@@ -7482,11 +7557,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if result.success and result.data and result.data.get("changed"):
             desc = result.data.get("description")
             self._dock_browser.rebuild()
+            self._suppress_tile_fetches(True)
             self._reload_active_view()
             if selected_cell:
                 self._restore_cell_selection(selected_cell)
-            self._set_status_state("ready", f"Undone: {desc}" if desc else "Undone")
             self._mark_dirty(True)
+            self._after_mutation_enqueue_recompute()
+            if not getattr(self, '_deferred_recalc_in_progress', False):
+                self._set_status_state("ready", f"Undone: {desc}" if desc else "Undone")
 
     @QtCore.Slot()
     def _on_redo(self) -> None:
@@ -7497,11 +7575,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if result.success and result.data and result.data.get("changed"):
             desc = result.data.get("description")
             self._dock_browser.rebuild()
+            self._suppress_tile_fetches(True)
             self._reload_active_view()
             if selected_cell:
                 self._restore_cell_selection(selected_cell)
-            self._set_status_state("ready", f"Redone: {desc}" if desc else "Redone")
             self._mark_dirty(True)
+            self._after_mutation_enqueue_recompute()
+            if not getattr(self, '_deferred_recalc_in_progress', False):
+                self._set_status_state("ready", f"Redone: {desc}" if desc else "Redone")
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:  # type: ignore[override]
         """Handle events for the rule bar and other watched objects.

@@ -23,6 +23,9 @@ from .utils import CellError, RuleValidationError, _RULE_EVAL_DEBUG, _normalize_
 class RuleEvaluator:
     """Evaluate rule body expressions.  Pure literals work with no resolver."""
 
+    def __init__(self):
+        self._ast_cache: dict[str, Any] = {}
+
     @staticmethod
     def _with_seq_keyword_guard(
         resolver: CubeResolver | None,
@@ -224,31 +227,36 @@ class RuleEvaluator:
         if expr == "":
             return 0.0
 
-        # Syntactic validation for all dynamic bounds in this expression:
-        # any inner $<...> that contains range syntax or wildcard items is
-        # illegal and must raise RuleValidationError, regardless of the
-        # evaluation context.
-        if "$<" in expr:
-            i = 0
-            n = len(expr)
-            while i < n:
-                start = expr.find("$<", i)
-                if start == -1:
-                    break
-                end = expr.find(">", start + 2)
-                if end == -1:
-                    # Let the normal parser surface a syntax error later.
-                    break
-                inner = expr[start + 2 : end]
-                from .refs import _validate_dynamic_bound
-                _validate_dynamic_bound(inner)
-                i = end + 1
+        cached = self._ast_cache.get(expr)
+        if cached is not None:
+            ast_node = cached
+        else:
+            # Syntactic validation for all dynamic bounds in this expression:
+            # any inner $<...> that contains range syntax or wildcard items is
+            # illegal and must raise RuleValidationError, regardless of the
+            # evaluation context.
+            if "$<" in expr:
+                i = 0
+                n = len(expr)
+                while i < n:
+                    start = expr.find("$<", i)
+                    if start == -1:
+                        break
+                    end = expr.find(">", start + 2)
+                    if end == -1:
+                        # Let the normal parser surface a syntax error later.
+                        break
+                    inner = expr[start + 2 : end]
+                    from .refs import _validate_dynamic_bound
+                    _validate_dynamic_bound(inner)
+                    i = end + 1
 
-        tokens = _tokenise(expr)
-        ast_node = _Parser(tokens).parse()
-        
-        # Validate that rules don't have bidirectional recurrence (both PREV and NEXT)
-        self._validate_no_bidirectional_recurrence(ast_node)
+            tokens = _tokenise(expr)
+            ast_node = _Parser(tokens).parse()
+
+            # Validate that rules don't have bidirectional recurrence (both PREV and NEXT)
+            self._validate_no_bidirectional_recurrence(ast_node)
+            self._ast_cache[expr] = ast_node
         
         result = self._eval(ast_node, resolver, base_addr)
         return _normalize_negative_zero(result)

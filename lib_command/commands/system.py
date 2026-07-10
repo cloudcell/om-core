@@ -4,7 +4,7 @@ System commands - Save, load, recalc, quit operations.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 
 def cmd_recalc(ctx, scope: str = "all") -> dict:
@@ -12,7 +12,7 @@ def cmd_recalc(ctx, scope: str = "all") -> dict:
     Recalculate the model.
 
     Args:
-        scope: "all", "visible", "cube:<id>"
+        scope: "all", "dirty", "cube:<id>"
     """
     engine = ctx.engine
     if not engine:
@@ -26,25 +26,83 @@ def cmd_recalc(ctx, scope: str = "all") -> dict:
     # delete_dimension_items) so that invalidation happens at the mutation
     # site, not during recalculation.
 
-    if scope == "all":
-        if hasattr(engine, 'recalculate_all'):
-            engine.recalculate_all()
-        elif hasattr(engine, 'calculate'):
-            engine.calculate()
-    elif scope == "visible":
-        # Visible recalculation: invalidate stale visible cell nodes before recomputing.
-        # The engine recomputes the full workspace; visible cells are refreshed
-        # on the next grid read. Future: narrow to viewport-only cells.
-        if hasattr(engine, 'recalculate_all'):
-            engine.recalculate_all()
-        elif hasattr(engine, 'calculate'):
-            engine.calculate()
-    elif scope.startswith("cube:"):
-        cube_id = scope[5:]
-        if hasattr(engine, 'recalculate_cube'):
-            engine.recalculate_cube(cube_id)
-
-    return {"scope": scope, "status": "completed"}
+    try:
+        if scope == "all":
+            if hasattr(engine, 'recalculate_all'):
+                engine.recalculate_all()
+            elif hasattr(engine, 'calculate'):
+                engine.calculate()
+            generation = engine.bump_generation()
+            return {
+                "scope": scope,
+                "ok": True,
+                "generation": generation,
+                "node_count": 0,
+            }
+        elif scope == "dirty":
+            try:
+                node_count = engine.recompute_dirty_nodes()
+                return {
+                    "scope": scope,
+                    "ok": True,
+                    "generation": engine.bump_generation(),
+                    "node_count": node_count,
+                }
+            except Exception as e:
+                return {
+                    "scope": scope,
+                    "ok": False,
+                    "generation": engine.generation,
+                    "node_count": 0,
+                    "error": str(e),
+                }
+        elif scope.startswith("cube:"):
+            cube_id = scope[5:]
+            if hasattr(engine, 'recalculate_cube'):
+                engine.recalculate_cube(cube_id)
+            generation = engine.bump_generation()
+            return {
+                "scope": scope,
+                "ok": True,
+                "generation": generation,
+                "node_count": 0,
+            }
+        elif scope == "visible":
+            # Deprecated: "visible" was a misnomer that recomputed the whole
+            # workspace.  Fall back to a full recalculation.
+            scope = "all"
+            if hasattr(engine, 'recalculate_all'):
+                engine.recalculate_all()
+            elif hasattr(engine, 'calculate'):
+                engine.calculate()
+            generation = engine.bump_generation()
+            return {
+                "scope": scope,
+                "ok": True,
+                "generation": generation,
+                "node_count": 0,
+            }
+        else:
+            # Unknown scope defaults to a full recalculation for safety.
+            if hasattr(engine, 'recalculate_all'):
+                engine.recalculate_all()
+            elif hasattr(engine, 'calculate'):
+                engine.calculate()
+            generation = engine.bump_generation()
+            return {
+                "scope": scope,
+                "ok": True,
+                "generation": generation,
+                "node_count": 0,
+            }
+    except Exception as e:
+        return {
+            "scope": scope,
+            "ok": False,
+            "generation": engine.generation,
+            "node_count": 0,
+            "error": str(e),
+        }
 
 
 def cmd_save(ctx, path: Optional[str] = None) -> dict:
@@ -162,9 +220,19 @@ def cmd_load(ctx, path: str) -> dict:
 
             # Keep engine saved default in sync with loaded workspace.
             engine = getattr(ctx, 'engine', None)
+            bootstrap_profile: dict[str, Any] | None = None
             if engine is not None:
                 engine.replace_workspace(ws)
                 ctx.workspace = engine.workspace
+
+            # Bootstrap the full dependency graph before the workspace is
+            # considered ready for GUI interaction.
+            if engine is not None:
+                try:
+                    bootstrap_profile = engine.bootstrap_dependency_graph()
+                except Exception as exc:
+                    ctx.status(f"Load failed: dependency graph bootstrap error: {exc}")
+                    raise ValueError(f"Dependency graph bootstrap failed after loading {path}: {exc}") from exc
 
             variables = getattr(ctx, "variables", None)
             if variables is not None:
@@ -186,7 +254,7 @@ def cmd_load(ctx, path: str) -> dict:
             except Exception:
                 pass  # Event emission failure is non-fatal
 
-            return {"path": path}
+            return {"path": path, "bootstrap": bootstrap_profile}
         else:
             raise ValueError(f"Failed to load: {path}")
     except Exception as e:

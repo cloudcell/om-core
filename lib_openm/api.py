@@ -4,6 +4,7 @@ from lib_contracts.types import RuleValidationError
 from lib_openm._engine_core import (
     _EngineCore,
     AddAggregateItemResult,
+    CellMeta,
     CellValue,
     Explain,
     RuleDiagnostic,
@@ -62,6 +63,20 @@ class Engine:
 
     def batch_set_cell_data(self, *args, **kwargs):
         return self._core.batch_set_cell_data(*args, **kwargs)
+
+    def bootstrap_dependency_graph(self, *args, **kwargs):
+        return self._core.bootstrap_dependency_graph(*args, **kwargs)
+
+    @property
+    def generation(self):
+        return self._core.generation
+
+    @property
+    def is_gui_ready(self):
+        return self._core.is_gui_ready
+
+    def bump_generation(self, *args, **kwargs):
+        return self._core.bump_generation(*args, **kwargs)
 
     def can_redo(self, *args, **kwargs):
         return self._core.can_redo(*args, **kwargs)
@@ -141,14 +156,23 @@ class Engine:
     def find_cube_by_name(self, *args, **kwargs):
         return self._core.find_cube_by_name(*args, **kwargs)
 
+    def find_anchored_rule(self, *args, **kwargs):
+        return self._core.workspace.find_anchored_rule(*args, **kwargs)
+
     def find_rule(self, *args, **kwargs):
         return self._core.find_rule(*args, **kwargs)
 
     def get_cell_by_addr(self, *args, **kwargs):
         return self._core.get_cell_by_addr(*args, **kwargs)
 
+    def get_cached_cell_value_by_addr(self, *args, **kwargs):
+        return self._core.get_cached_cell_value_by_addr(*args, **kwargs)
+
     def get_cell_value(self, *args, **kwargs):
         return self._core.get_cell_value(*args, **kwargs)
+
+    def resolve_cell_meta(self, *args, **kwargs):
+        return self._core.resolve_cell_meta(*args, **kwargs)
 
     def get_cells_batch(self, *args, **kwargs):
         return self._core.get_cells_batch(*args, **kwargs)
@@ -201,6 +225,12 @@ class Engine:
 
     def recompute_dirty_nodes(self, *args, **kwargs):
         return self._core.recompute_dirty_nodes(*args, **kwargs)
+
+    def dirty_count(self, *args, **kwargs):
+        return self._core.dirty_count(*args, **kwargs)
+
+    def has_dirty_nodes(self, *args, **kwargs):
+        return self._core.has_dirty_nodes(*args, **kwargs)
 
     def redo(self, *args, **kwargs):
         return self._core.redo(*args, **kwargs)

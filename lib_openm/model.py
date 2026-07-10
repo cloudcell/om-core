@@ -1133,13 +1133,13 @@ class Workspace:
         best_specificity = -1
 
         rule_ids = self._cube_ordered_rule_ids(cube_id)
-        masks = self._cube_rule_masks.get(cube_id, []) if self._cube_rule_masks is not None else []
-        specs = self._cube_rule_specificity.get(cube_id, []) if self._cube_rule_specificity is not None else []
 
         cube = self.cubes.get(cube_id)
         for idx, rid in enumerate(rule_ids):
             r = self.rules[rid]
-            mask = masks[idx] if idx < len(masks) else self._effective_rule_mask(r, dimension_ids, cube)
+            # Recompute the effective mask from the rule's stored targets so
+            # existing rules still apply after a cube gains or reorders dims.
+            mask = self._effective_rule_mask(r, dimension_ids, cube)
             if _DEBUG_RULE_MATCH:
                 print(f"[DEBUG RULE MATCH] rid={rid[:8]}, addr={addr}, mask={mask}, dim_ids={dimension_ids}")
             if mask is None or len(mask) != len(addr):
@@ -1158,7 +1158,7 @@ class Workspace:
             if not applies:
                 continue
 
-            specificity = specs[idx] if idx < len(specs) else sum(1 for x in mask if x is not None)
+            specificity = sum(1 for x in mask if x is not None)
             if _DEBUG_RULE_MATCH:
                 print(f"[DEBUG RULE MATCH]   -> APPLIES! specificity={specificity}")
 

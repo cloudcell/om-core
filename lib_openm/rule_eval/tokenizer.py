@@ -90,6 +90,35 @@ def _normalise_bare_wildcard_ref(expr: str) -> str:
     return "".join(result)
 
 
+_UNBRACKETED_WILDCARD_CHAIN_RE = re.compile(
+    r"(?<![A-Za-z0-9_%\[])"  # not part of a larger identifier or already bracketed
+    + r"(?:([A-Za-z_%][A-Za-z0-9_\s%]*)::\s*)?"
+    + r"([A-Za-z_%][A-Za-z0-9_\s%]*\.(?:\*|[A-Za-z0-9_%][A-Za-z0-9_\s%]*)"
+    + r"(?:\s*:\s*[A-Za-z_%][A-Za-z0-9_\s%]*\.(?:\*|[A-Za-z0-9_%][A-Za-z0-9_\s%]*))*)"
+    + r"(?![A-Za-z0-9_%])"
+)
+
+
+def _normalise_unbracketed_wildcard_chains(expr: str) -> str:
+    """Convert unbracketed multi-segment refs that use `.*` into bracketed form.
+
+    The unbracketed reference regex cannot distinguish the `*` wildcard from the
+    multiplication operator, so `Cube::Dim.Item:Dim.*` is rewritten to
+    `Cube::[Dim.Item, Dim.*]` before tokenization. References without a `.*`
+    wildcard are left unchanged.
+    """
+
+    def repl(match: re.Match[str]) -> str:
+        cube, chain = match.group(1), match.group(2)
+        if ".*" not in chain:
+            return match.group(0)
+        if cube:
+            return f"{cube}::[{chain}]"
+        return f"[{chain}]"
+
+    return _UNBRACKETED_WILDCARD_CHAIN_RE.sub(repl, expr)
+
+
 # Single regex for tokenization - NUM without leading +/-
 _TOKEN_RE = re.compile(
     r"""
@@ -123,6 +152,7 @@ _TOKEN_RE = re.compile(
 def _tokenise(expr: str) -> list[_Tok]:
     expr = _normalise_cube_wildcards(expr)
     expr = _normalise_bare_wildcard_ref(expr)
+    expr = _normalise_unbracketed_wildcard_chains(expr)
     toks: list[_Tok] = []
     pos = 0
     while pos < len(expr):

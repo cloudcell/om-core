@@ -57,6 +57,7 @@ QUERY_TYPE_TO_TOPIC: dict[str, str] = {
     "cell_value_by_ref": "query.cell.value_by_ref",
     "cell_rule": "query.cell.rule",
     "grid_viewport_snapshot": "query.grid.viewport_snapshot",
+    "grid_viewport_snapshot_batch": "query.grid.viewport_snapshot_batch",
     # Rule domain
     "rule_detail": "query.rule.detail",
     "rule_target_resolve": "query.rule.target_resolve",

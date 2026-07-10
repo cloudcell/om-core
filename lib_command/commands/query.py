@@ -16,6 +16,7 @@ Produce TypedDict DTOs from lib_openm.dto.cell — no engine objects cross the b
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import math
 import time
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 DEBUG_ENGINE = False
 
+from lib_contracts.errors import SnapshotInvariantError
 from lib_openm import config as _om_config
 from lib_openm.dto.cell import (
     CellAddressDTO,
@@ -361,6 +363,28 @@ def _cmd_query(
             page_selections,
             channels,
             profiler=getattr(ctx, "profiler", None),
+            allow_evaluation=bool(kwargs.get("allow_evaluation", False)),
+        )
+
+    if type == "grid_viewport_snapshot_batch":
+        view_id = kwargs.get("view_id")
+        tiles = kwargs.get("tiles")
+        page_selections = kwargs.get("page_selections")
+        channels = kwargs.get("channels")
+        generation = kwargs.get("generation")
+        if not all(v is not None for v in [view_id, tiles, page_selections]):
+            raise ValueError(
+                "grid_viewport_snapshot_batch query requires view_id, tiles, page_selections"
+            )
+        return cmd_grid_viewport_snapshot_batch(
+            engine,
+            view_id,
+            tiles,
+            page_selections,
+            channels,
+            generation=generation,
+            profiler=getattr(ctx, "profiler", None),
+            allow_evaluation=bool(kwargs.get("allow_evaluation", False)),
         )
 
     if type == "selection_stats":
@@ -1280,6 +1304,112 @@ def cmd_view_col_header(engine, view_id: str, section: int) -> dict:
 # =============================================================================
 
 
+def _compute_viewport_snapshot(
+    engine,
+    view,
+    cube,
+    row_keys: list[tuple[str, ...]],
+    col_keys: list[tuple[str, ...]],
+    page_selections: dict[str, str],
+    requested_channels: list[str],
+    allow_evaluation: bool = False,
+) -> tuple[dict[str, dict], dict[str, dict[str, Any]], set[tuple[str, ...]]]:
+    """Read-only cell computation shared by single and batch snapshot commands.
+
+    Returns ``(cells, channel_values, visible_addrs)``.  By default it never
+    evaluates rules or records dependency edges, and raises ``SnapshotInvariantError``
+    if a visible rule cell is dirty or untracked.  When ``allow_evaluation`` is
+    True, dirty/untracked rule cells are evaluated first so the GUI can paint a
+    tile even when the dependency graph has not yet caught up.
+    """
+    visible_addrs: set[tuple[str, ...]] = set()
+    cells: dict[str, dict] = {}
+    channel_values: dict[str, dict[str, Any]] = {}
+    for ch in requested_channels:
+        channel_values[ch] = {}
+
+    addr_list: list[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], str]] = []
+    channel_addr_map: dict[str, dict[str, tuple[str, ...]]] = {}
+    if requested_channels:
+        for ch in requested_channels:
+            channel_addr_map[ch] = {}
+
+    with engine.dependency_tracking_disabled():
+        for rk in row_keys:
+            for ck in col_keys:
+                addr = resolve_addr(view, cube, rk, ck, page_selections)
+                visible_addrs.add(addr)
+                key = make_viewport_cell_key(rk, ck)
+                addr_list.append((rk, ck, addr, key))
+
+                for ch in requested_channels:
+                    channel_addr_map[ch][key] = resolve_addr(
+                        view, cube, rk, ck, page_selections, channel=ch
+                    )
+
+    # Safety net for GUI tile fetches: rule-covered cells that are not yet
+    # clean/tracked in the dependency graph are evaluated now so the read-only
+    # path below can read their values.  This prevents the GUI from showing blank
+    # tiles when the engine graph state lags behind structural changes (e.g.
+    # attaching a new dimension) or when dependency tracking was toggled off.
+    if allow_evaluation:
+        needs_eval: set[tuple[str, ...]] = set()
+        for rk, ck, addr, key in addr_list:
+            meta = engine.resolve_cell_meta(cube, addr)
+            if meta.source == "rule" and (meta.is_dirty or not meta.is_tracked):
+                needs_eval.add(addr)
+        for ch in requested_channels:
+            ch_addr_map = channel_addr_map[ch]
+            for _rk, _ck, _addr, key in addr_list:
+                ch_addr = ch_addr_map[key]
+                meta = engine.resolve_cell_meta(cube, ch_addr)
+                if meta.source == "rule" and (meta.is_dirty or not meta.is_tracked):
+                    needs_eval.add(ch_addr)
+
+        tracking_enabled = engine._is_tracking_enabled()
+        for addr in needs_eval:
+            try:
+                engine._get_cell_by_addr(cube, addr)
+            except SnapshotInvariantError:
+                raise
+            except Exception:
+                # Surface evaluation errors as CellError values below instead of
+                # failing the whole viewport.
+                pass
+    else:
+        tracking_enabled = engine._is_tracking_enabled()
+
+    with engine.dependency_tracking_disabled():
+        # Fetch values and determine sources from read-only APIs only.
+        for rk, ck, addr, key in addr_list:
+            meta = engine.resolve_cell_meta(cube, addr)
+            if (
+                tracking_enabled
+                and meta.source == "rule"
+                and (meta.is_dirty or not meta.is_tracked)
+            ):
+                raise SnapshotInvariantError(
+                    f"grid_viewport_snapshot observed dirty/untracked rule cell at {addr}"
+                )
+            value = engine.get_cached_cell_value_by_addr(cube, addr)
+            cells[key] = {
+                "value": _coerce_to_primitive(value),
+                "source": meta.source,
+                "cube_id": cube.id,
+                "addr": addr,
+            }
+
+        # Requested channels
+        for ch in requested_channels:
+            ch_addr_map = channel_addr_map[ch]
+            for _rk, _ck, _addr, key in addr_list:
+                ch_addr = ch_addr_map[key]
+                ch_value = engine.get_cached_cell_value_by_addr(cube, ch_addr)
+                channel_values[ch][key] = _coerce_to_primitive(ch_value)
+
+    return cells, channel_values, visible_addrs
+
+
 def cmd_grid_viewport_snapshot(
     engine,
     view_id: str,
@@ -1288,6 +1418,7 @@ def cmd_grid_viewport_snapshot(
     page_selections: dict[str, str],
     channels: list[str] | None,
     profiler: Any | None = None,
+    allow_evaluation: bool = False,
 ) -> dict:
     """Batch query for visible viewport cells, metadata, and channel values.
 
@@ -1306,20 +1437,6 @@ def cmd_grid_viewport_snapshot(
     if requested_channels:
         validate_channels(requested_channels)
 
-    # Determine cell source for visible addresses.
-    visible_addrs: set[tuple[str, ...]] = set()
-    cells: dict[str, dict] = {}
-    channel_values: dict[str, dict[str, Any]] = {}
-    for ch in requested_channels:
-        channel_values[ch] = {}
-
-    # Resolve addresses first so they are available for both value and channel passes.
-    addr_list: list[tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], str]] = []
-    channel_addr_map: dict[str, dict[str, tuple[str, ...]]] = {}
-    if requested_channels:
-        for ch in requested_channels:
-            channel_addr_map[ch] = {}
-
     cell_count = len(row_keys) * len(col_keys)
     if DEBUG_ENGINE:
         print(
@@ -1328,64 +1445,10 @@ def cmd_grid_viewport_snapshot(
             flush=True,
         )
     with _span("grid_viewport_snapshot.compute_cells"):
-        for rk in row_keys:
-            for ck in col_keys:
-                addr = resolve_addr(view, cube, rk, ck, page_selections)
-                visible_addrs.add(addr)
-                key = make_viewport_cell_key(rk, ck)
-                addr_list.append((rk, ck, addr, key))
-
-                for ch in requested_channels:
-                    channel_addr_map[ch][key] = resolve_addr(
-                        view, cube, rk, ck, page_selections, channel=ch
-                    )
-
-        # Fetch values and determine sources.
-        # Disable dependency tracking during this read-only bulk query.  Each
-        # get_cell_by_addr call otherwise re-evaluates cached precedent cells
-        # just to record edges, which makes Period[prev] chains blow up
-        # exponentially when many visible addresses are cold.
-        with engine.dependency_tracking_disabled():
-            for rk, ck, addr, key in addr_list:
-                # Value (default @.value channel)
-                # Use get_cell_by_addr so lazy rule evaluation is triggered;
-                # cube.get(addr) returns None for cells whose rule has never run.
-                cached = cube.get(addr)
-                cell_t0 = time.perf_counter()
-                try:
-                    value = engine.get_cell_by_addr(cube, addr)
-                except Exception:
-                    value = None
-                cell_ms = (time.perf_counter() - cell_t0) * 1000
-                if cell_ms > 100:
-                    logger.info(
-                        "[query] SLOW get_cell_by_addr view=%s addr=%s cell_key=%s "
-                        "cached=%s result=%s duration=%.3f ms",
-                        view_id[:8] if view_id else None,
-                        addr,
-                        key,
-                        cached is not None,
-                        value is not None,
-                        cell_ms,
-                    )
-                source = _determine_cell_source(engine, cube, addr)
-                cells[key] = {
-                    "value": _coerce_to_primitive(value),
-                    "source": source,
-                    "cube_id": cube.id,
-                    "addr": addr,
-                }
-
-            # Requested channels
-            for ch in requested_channels:
-                ch_addr_map = channel_addr_map[ch]
-                for _rk, _ck, _addr, key in addr_list:
-                    ch_addr = ch_addr_map[key]
-                    try:
-                        ch_value = engine.get_cell_by_addr(cube, ch_addr)
-                    except Exception:
-                        ch_value = None
-                    channel_values[ch][key] = _coerce_to_primitive(ch_value)
+        cells, channel_values, visible_addrs = _compute_viewport_snapshot(
+            engine, view, cube, row_keys, col_keys, page_selections, requested_channels,
+            allow_evaluation=allow_evaluation,
+        )
 
     # Viewport-relevant metadata filtering (F5a non-blocking caution).
     # For correctness, include all; optimisation to filter may follow later.
@@ -1434,6 +1497,81 @@ def cmd_grid_viewport_snapshot(
             "cells": cells,
             "channels": channel_values,
         }
+
+
+def cmd_grid_viewport_snapshot_batch(
+    engine,
+    view_id: str,
+    tiles: list[dict[str, Any]],
+    page_selections: dict[str, str],
+    channels: list[str] | None,
+    generation: int | None = None,
+    profiler: Any | None = None,
+    allow_evaluation: bool = False,
+) -> dict:
+    """Batch query for multiple viewport tiles in one command.
+
+    Each tile is a dict with ``bounds`` (list of 4 ints), ``row_keys``, and
+    ``col_keys``. The response is keyed by the JSON-serialized bounds and tagged
+    with the caller-supplied ``generation`` so the GUI can discard stale batches.
+
+    Returns a plain dict of the form ``{"generation": int, "tiles": {}}``.
+    No engine objects cross the boundary.
+    """
+    _span = profiler.span if profiler is not None else lambda name, parent=None: contextlib.nullcontext()
+
+    view = engine.require_view_by_id(view_id)
+    cube = engine.require_cube_by_id(view.cube_id)
+
+    requested_channels = channels or []
+    if requested_channels:
+        validate_channels(requested_channels)
+
+    # Build view-level metadata once; each tile snapshot includes it so that
+    # TileRenderer can treat each tile as a standalone ViewportSnapshotDTO.
+    item_formats: dict[str, CellFormatDict] = {}
+    view_item_formats = getattr(view, "item_formats", {}) or {}
+    for fmt_key, fmt in view_item_formats.items():
+        item_formats[fmt_key] = cell_format_to_dict(fmt)
+
+    group_formats: dict[str, CellFormatDict] = {}
+    view_group_formats = getattr(view, "group_formats", {}) or {}
+    for grp_key, fmt in view_group_formats.items():
+        group_formats[grp_key] = cell_format_to_dict(fmt)
+
+    tile_payloads: dict[str, dict] = {}
+
+    with _span("grid_viewport_snapshot_batch.compute_cells"):
+        for tile in tiles:
+            bounds = tile["bounds"]
+            row_keys = tile["row_keys"]
+            col_keys = tile["col_keys"]
+            cells, channel_values, visible_addrs = _compute_viewport_snapshot(
+                engine, view, cube, row_keys, col_keys, page_selections, requested_channels,
+                allow_evaluation=allow_evaluation,
+            )
+            visible_override_addrs = [
+                addr for addr in getattr(cube, "user_override_addrs", set())
+                if addr in visible_addrs
+            ]
+            bounds_key = json.dumps(bounds, separators=(",", ":"))
+            tile_payloads[bounds_key] = {
+                "view_id": view_id,
+                "cube_id": cube.id,
+                "row_dim_ids": list(view.row_dim_ids),
+                "col_dim_ids": list(view.col_dim_ids),
+                "page_dim_ids": list(view.page_dim_ids),
+                "item_formats": item_formats,
+                "group_formats": group_formats,
+                "user_override_addrs": visible_override_addrs,
+                "cells": cells,
+                "channels": channel_values,
+            }
+
+    return {
+        "generation": generation,
+        "tiles": tile_payloads,
+    }
 
 
 def cmd_cell_channel_values(
@@ -1601,22 +1739,3 @@ def cmd_selection_stats(
             "sampled": False,
         }
 
-
-def _determine_cell_source(
-    engine,
-    cube,
-    addr: tuple[str, ...],
-) -> str:
-    """Return the canonical source string for a cell address."""
-    v = cube.get(addr)
-    anchored = engine.workspace.find_anchored_rule(cube.id, addr)
-    if anchored is None:
-        anchored = engine.find_rule(cube.id, addr, cube.dimension_ids)
-    is_override = cube.is_user_override(addr)
-    if anchored is not None:
-        return "override" if is_override else "rule"
-    if is_override:
-        return "override"
-    if v is None:
-        return "empty"
-    return "input"

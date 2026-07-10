@@ -57,7 +57,7 @@ def _cell_format_from_dict(fmt_dict: dict[str, Any]) -> CellFormat:
 
 
 class TileFetchThread(QtCore.QThread):
-    """Fetch grid_viewport_snapshot off the main thread, one small tile at a time."""
+    """Fetch grid_viewport_snapshot_batch off the main thread and emit per-tile results."""
 
     tile_ready = QtCore.Signal(dict, tuple, int, bool, int)  # snapshot, bounds, generation, is_plain, data_gen
 
@@ -87,73 +87,82 @@ class TileFetchThread(QtCore.QThread):
         self._profiler = profiler
         self._parent_span_name = parent_span_name
 
-    def _do_query(
-        self,
-        bounds: tuple[int, int, int, int],
-        row_keys: list[tuple[str, ...]],
-        col_keys: list[tuple[str, ...]],
-    ) -> dict[str, Any]:
-        """Blocking query wrapper — runs inside ThreadPoolExecutor."""
+    def _do_batch_query(self) -> dict[str, Any]:
+        """Blocking batch query wrapper — runs once per viewport update."""
         span = NOOP_SPAN
         if self._profiler is not None:
-            span = self._profiler.span("TileFetchThread._do_query", parent=self._parent_span_name)
+            span = self._profiler.span("TileFetchThread._do_batch_query", parent=self._parent_span_name)
         with span:
-            cells = len(row_keys) * len(col_keys)
+            tiles_payload = [
+                {"bounds": list(bounds), "row_keys": row_keys, "col_keys": col_keys}
+                for bounds, row_keys, col_keys in self._tiles
+            ]
+            cells = sum(len(rk) * len(ck) for _, rk, ck in self._tiles)
             DEBUG_GUI and print(
                 f"[TILE-QUERY] start view={self._view_id[:8] if self._view_id else None} "
-                f"bounds={bounds} cells={cells} plain={self._plain}"
+                f"tiles={len(self._tiles)} cells={cells} plain={self._plain}"
             )
             t0 = time.perf_counter()
             try:
                 result = self._session.query(
-                    "grid_viewport_snapshot",
+                    "grid_viewport_snapshot_batch",
                     view_id=self._view_id,
-                    row_keys=row_keys,
-                    col_keys=col_keys,
+                    tiles=tiles_payload,
                     page_selections=self._page_selections,
                     channels=self._channels,
+                    generation=self._generation,
+                    allow_evaluation=True,
                 )
             except Exception as exc:
+                logger.warning(
+                    "[TileFetchThread] batch query failed view=%s exc=%s",
+                    self._view_id[:8] if self._view_id else None, exc,
+                )
                 DEBUG_GUI and print(f"[TILE-QUERY] FAILED view={self._view_id[:8] if self._view_id else None} exc={exc}")
                 return {}
             duration_ms = (time.perf_counter() - t0) * 1000
             DEBUG_GUI and print(
                 f"[TILE-QUERY] done view={self._view_id[:8] if self._view_id else None} "
-                f"bounds={bounds} cells={cells} duration={duration_ms:.1f} ms"
+                f"tiles={len(self._tiles)} cells={cells} duration={duration_ms:.1f} ms"
             )
+            if not isinstance(result, dict):
+                logger.warning(
+                    "[TileFetchThread] batch query returned non-dict %s for view=%s",
+                    type(result).__name__,
+                    self._view_id[:8] if self._view_id else None,
+                )
+                return {}
             return result
 
     def run(self) -> None:
-        """Fetch tiles asynchronously using ThreadPoolExecutor so this thread stays responsive."""
+        """Fetch all tiles in one batch query and emit per-tile results."""
         DEBUG_GUI and print(
             f"[TILE-THREAD] start view={self._view_id[:8] if self._view_id else None} "
             f"tiles={len(self._tiles)} plain={self._plain} gen={self._generation} data_gen={self._data_gen}"
         )
         t0 = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            for bounds, row_keys, col_keys in self._tiles:
-                if self.isInterruptionRequested():
-                    break
-                # Submit blocking query to executor thread.  The executor may
-                # already be shutting down if the grid is destroyed while this
-                # thread is running; in that case just stop gracefully.
-                try:
-                    future = executor.submit(self._do_query, bounds, row_keys, col_keys)
-                except RuntimeError:
-                    logger.warning("[TileFetchThread] executor shut down early, aborting view=%s", self._view_id[:8] if self._view_id else None)
-                    break
-                # Poll with timeout so we remain responsive to interruption
-                while not future.done():
-                    if self.isInterruptionRequested():
-                        break
-                    time.sleep(0.005)
-                if self.isInterruptionRequested():
-                    break
-                snapshot = future.result()
-                self.tile_ready.emit(snapshot or {}, bounds, self._generation, self._plain, self._data_gen)
-                # Yield so the GUI thread and transport command handlers are not
-                # starved while a long background prefetch run is in progress.
-                time.sleep(0)
+        result = self._do_batch_query()
+        # A generation mismatch means the request was superseded before the
+        # batch completed; treat the whole response as stale so tiles are not
+        # painted with outdated data.
+        result_gen = result.get("generation")
+        if result_gen != self._generation:
+            DEBUG_GUI and print(
+                f"[TILE-THREAD] discarding stale batch gen={result_gen} "
+                f"current={self._generation} view={self._view_id[:8] if self._view_id else None}"
+            )
+            result_tiles = {}
+        else:
+            result_tiles = result.get("tiles", {})
+        for bounds, row_keys, col_keys in self._tiles:
+            if self.isInterruptionRequested():
+                break
+            bounds_key = json.dumps(list(bounds), separators=(",", ":"))
+            snapshot = result_tiles.get(bounds_key, {})
+            self.tile_ready.emit(snapshot or {}, bounds, self._generation, self._plain, self._data_gen)
+            # Yield so the GUI thread and transport command handlers are not
+            # starved while a long background prefetch run is in progress.
+            time.sleep(0)
         dur = (time.perf_counter() - t0) * 1000
         DEBUG_GUI and print(
             f"[TILE-THREAD] finish view={self._view_id[:8] if self._view_id else None} "
@@ -428,6 +437,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         self._plain_image_data_gens: dict[tuple[int, int, int, int], int] = {}
         self._image_data_gens: dict[tuple[int, int, int, int], int] = {}
         self._pending_tile_fetch: bool = False
+        self._tile_fetch_suppressed: bool = False
         self._local_selection_change_in_progress: bool = False
         # Parallel pre-render pool (size from config, default half CPU cores)
         self._tile_render_pool = QtCore.QThreadPool()
@@ -706,6 +716,22 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         except RuntimeError:
             # C++ object has already been deleted; treat as not alive.
             return False
+
+    def formatted_fetch_running(self) -> bool:
+        """Return True if the formatted (visible) tile fetch is in progress."""
+        return self._is_thread_alive(self._tile_fetch_thread)
+
+    def formatted_fetch_active(self) -> bool:
+        """Return True if a formatted tile fetch is running or has been scheduled.
+
+        This also covers the gap between reload() scheduling a fetch and the
+        actual TileFetchThread starting.
+        """
+        return (
+            self._is_thread_alive(self._tile_fetch_thread)
+            or getattr(self, '_force_tile_refetch', False)
+            or getattr(self, '_pending_tile_fetch', False)
+        )
 
     def _invalidate_snapshot_cache(self) -> None:
         """Invalidate the disposable paint cache (full: plain + formatted)."""
@@ -1306,6 +1332,34 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     tiles.append((bounds, row_keys, col_keys))
         return tiles
 
+    def set_tile_fetch_suppressed(self, suppressed: bool) -> None:
+        """Suppress or resume background tile fetches.
+
+        While suppressed, tile fetch requests are remembered but not started.
+        When suppression is lifted, any pending request is started
+        immediately.  The GUI uses this to prevent tile fetches between a
+        model mutation and the completion of `run_recalculation(scope="dirty")`.
+        """
+        self._tile_fetch_suppressed = suppressed
+        if not suppressed and getattr(self, '_pending_tile_fetch', False):
+            self._start_tile_fetch()
+
+    def refresh_for_generation(self, generation: int) -> None:
+        """Invalidate cached tiles and schedule a fetch for the given engine generation."""
+        self._data_generation = generation
+        self._tile_generation += 1
+        self._plain_generation += 1
+        self._formatted_tile_data_gens.clear()
+        self._plain_image_data_gens.clear()
+        self._image_data_gens.clear()
+        self._tile_cache.clear()
+        self._tile_image_cache.clear()
+        self._tile_plain_cache.clear()
+        self._pending_cell_values.clear()
+        self._pending_tile_fetch = True
+        self.viewport().update()
+        self._start_tile_fetch()
+
     def _start_tile_fetch(self) -> None:
         """Start formatted thread immediately (viewport-specific); plain thread is background prefetch."""
         with self._span("MatrixGrid._start_tile_fetch"):
@@ -1314,6 +1368,9 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
     def _start_tile_fetch_impl(self) -> None:
         self._pending_tile_fetch = False
         if not self._rows or not self._cols or not self._view_id or self._session is None:
+            return
+        if getattr(self, '_tile_fetch_suppressed', False):
+            self._pending_tile_fetch = True
             return
 
         # Refresh runtime config that may have changed via Options dialog
@@ -1366,11 +1423,27 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         vc_c = (first_col + last_col) / 2
 
         page_selections = self._build_page_selections()
-        # Only fetch the visual channels the formatted renderer actually uses.
-        # The value/source/addr come from the cells dict; view-level formats come
-        # from the workspace read model.  Asking for every technical channel is
-        # expensive and starves the engine with redundant evaluations.
-        fmt_channels = ["fill", "font_color"]
+        # Fetch all format/visual/alignment channels the formatted renderer uses.
+        # The value/source/addr come from the cells dict; view-level static formats
+        # come from the workspace read model.  @-dimension format values
+        # (font_weight, format_number, etc.) must be requested explicitly or they
+        # will be missing from the tile snapshot channels.
+        fmt_channels = [
+            "fill",
+            "font_color",
+            "format_number",
+            "format_text",
+            "format_null",
+            "format_error",
+            "font_family",
+            "font_size",
+            "font_weight",
+            "font_italic",
+            "text_h_align",
+            "text_v_align",
+            "text_indent",
+            "text_wrap",
+        ]
 
         plain_enabled = gui_config("performance", "prerender_plain_data", False)
 

@@ -27,20 +27,30 @@ class RecalcWorker(QtCore.QObject):
 
     finished = QtCore.Signal(bool)  # success: True/False
     error = QtCore.Signal(str)
+    result_ready = QtCore.Signal(dict)  # full command result data
 
-    def __init__(self, session: Any) -> None:
+    def __init__(self, session: Any, scope: str = "all") -> None:
         super().__init__()
         self._session = session
+        self._scope = scope
 
     def run(self) -> None:
         """Run recalculation in background thread via session.execute."""
         try:
-            self._session.execute("run_recalculation", scope="all")
-            self.finished.emit(True)
+            result = self._session.execute("run_recalculation", scope=self._scope)
+            if result.success:
+                data = result.data or {}
+                self.result_ready.emit(data)
+                self.finished.emit(True)
+            else:
+                self.error.emit(result.error or "Recalculation failed")
+                self.finished.emit(False)
         except KeyboardInterrupt:
             self.error.emit("Calculation cancelled")
+            self.finished.emit(False)
         except Exception as e:
             self.error.emit(str(e))
+            self.finished.emit(False)
 
     def request_cancel(self) -> None:
         """Request cancellation of the calculation."""
