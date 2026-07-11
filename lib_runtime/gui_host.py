@@ -94,7 +94,7 @@ def run_with_splash(
 
     if load_path:
         try:
-            update_progress(50, f"Loading {Path(load_path).name}...")
+            update_progress(25, f"Loading {Path(load_path).name}...")
             runtime.command_session.execute("load_workspace", path=load_path)
         except Exception as exc:
             import warnings

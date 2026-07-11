@@ -302,7 +302,7 @@ def _run_gui_only():
     _mark('Loading modules')
 
     from lib_runtime.gui_host import run_with_splash
-    splash.set_progress(40, 'Initializing...')
+    splash.set_progress(20, 'Initializing...')
     _mark('Initializing GUI')
     from lib_command.core.bootstrap import init_command_services
     from lib_storeadapters.json_file_adapter import JsonFileAdapter

@@ -685,7 +685,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.gui_view_model = None
             self.gui_read_model_binder = None
 
-        self._report_progress(20, "Creating workspace pane...")
+        self._report_progress(30, "Creating workspace pane...")
         # Shared view workspace (tabs + rule panel) managed via controller
         self._workspace_pane = ViewWorkspacePane(
             session=self.session,
@@ -775,7 +775,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setCentralWidget(self._workspace_pane)
 
-        self._report_progress(30, "Creating model browser...")
+        self._report_progress(40, "Creating model browser...")
         self._dock_browser = ModelBrowserDock(session=self.session, parent=self)  # type: ignore[attr-defined]
         self._dock_browser.setObjectName("ModelBrowserDock")
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self._dock_browser)
@@ -788,7 +788,7 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda *_: self._update_focus_indicator(self._dock_browser.tree_widget)
         )
 
-        self._report_progress(40, "Creating info toolbox...")
+        self._report_progress(50, "Creating info toolbox...")
         self._dock_info = InfoToolboxDock(cell_read_model=self.cell_read_model, workspace_read_model=self.workspace_read_model, parent=self)
         self._dock_info.setObjectName("InfoToolboxDock")
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self._dock_info)
@@ -799,7 +799,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self._dock_browser.tree_widget.currentItemChanged.connect(self._on_browser_selection_changed)
 
-        self._report_progress(50, "Creating format toolbox...")
+        self._report_progress(60, "Creating format toolbox...")
         self._dock_format = FormatToolboxDock(self)
         self._dock_format.setObjectName("FormatToolboxDock")
         self.addDockWidget(QtCore.Qt.DockWidgetArea.LeftDockWidgetArea, self._dock_format)
@@ -811,7 +811,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.splitDockWidget(self._dock_browser, self._dock_info, QtCore.Qt.Orientation.Vertical)
         self.splitDockWidget(self._dock_info, self._dock_format, QtCore.Qt.Orientation.Vertical)
 
-        self._report_progress(60, "Creating performance monitor...")
+        self._report_progress(70, "Creating performance monitor...")
         self._dock_perf = PerformanceWatchDock(
             self,
             session=self.session,
@@ -826,7 +826,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, self._dock_perf)
 
-        self._report_progress(70, "Creating timeline panel...")
+        self._report_progress(80, "Creating timeline panel...")
         # Timeline dock manager - creates and adds panel to dock area
         self._timeline_manager = TimelineDockManager(self)
         self._dock_timeline = self._timeline_manager.get_panel()
@@ -972,12 +972,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Engine indicator removed.
 
-        self._report_progress(80, "Creating menus and toolbars...")
+        self._report_progress(90, "Creating menus and toolbars...")
         self._actions = create_actions(self)
         create_menus(self, self._actions)
         create_toolbar(self, self._actions)
 
-        self._report_progress(90, "Initializing workspace controller...")
+        self._report_progress(95, "Initializing workspace controller...")
         qapp = QtWidgets.QApplication.instance()
         if qapp is not None:
             qapp.focusChanged.connect(self._on_global_focus_changed)
