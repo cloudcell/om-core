@@ -8,6 +8,20 @@ from typing import Any, Optional
 
 from lib_command.core.domain_event_publisher import publish_domain_event
 from lib_command.core.message_bus import get_message_bus
+from lib_openm.engine_state import EngineState
+
+
+def _wrap_engine_command(engine, command_id, allowed_states, target_state, body, *, is_recovery=False, next_state=None, next_state_reason=None):
+    """Run a command body through the engine's serialized-command entry point."""
+    return engine.execute_serialized_command(
+        command_id,
+        allowed_states,
+        target_state,
+        body,
+        is_recovery=is_recovery,
+        next_state=next_state,
+        next_state_reason=next_state_reason,
+    )
 
 
 def _publish_workspace_event(topic: str, correlation_id: str | None, path: str, **extra: Any) -> None:
@@ -393,33 +407,92 @@ def cmd_clear_profiler_snapshot(ctx) -> dict:
 def cmd_run_recalculation(ctx, scope: str = "all") -> dict:
     """Recalculate the model — canonical command.
 
-    Thin wrapper around :func:`cmd_recalc` for canonical naming.
+    Runs under the engine state machine: ``IDLE`` or ``FAULTED`` ->
+    ``RECALCULATING`` -> ``IDLE`` on success, or ``FAULTED`` on failure.
     """
-    return cmd_recalc(ctx, scope)
+    engine = ctx.engine
+    if not engine:
+        raise ValueError("No engine available")
+
+    def _body():
+        result = cmd_recalc(ctx, scope)
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error", "recalculation failed"))
+        return result
+
+    return _wrap_engine_command(
+        engine,
+        "run_recalculation",
+        {EngineState.IDLE, EngineState.FAULTED},
+        EngineState.RECALCULATING,
+        _body,
+        is_recovery=True,
+        next_state=EngineState.IDLE,
+        next_state_reason="recalc_complete",
+    )
+
+
+def cmd_cancel_operation(ctx) -> dict:
+    """Cancel an in-progress mutation, load, or recalculation.
+
+    This is the canonical cancellation command. It transitions the engine to
+    ``CANCELLING`` and sets the cancellation flag so the active command raises
+    ``CalculationCancelledError`` and the engine ends in ``FAULTED``.
+    """
+    engine = ctx.engine
+    if not engine:
+        raise ValueError("No engine available")
+
+    engine.request_cancel_operation()
+    ctx.status("Cancellation requested")
+    return {"status": "cancel_requested"}
 
 
 def cmd_cancel_recalculation(ctx) -> dict:
-    """Cancel an in-progress recalculation — canonical command.
-
-    Thin wrapper around :func:`cmd_cancel_recalc` for canonical naming.
-    """
-    return cmd_cancel_recalc(ctx)
+    """Cancel an in-progress recalculation — legacy alias for cancel_operation."""
+    return cmd_cancel_operation(ctx)
 
 
 def cmd_save_workspace(ctx, path: Optional[str] = None) -> dict:
     """Save the current workspace — canonical command.
 
-    Thin wrapper around :func:`cmd_save` for canonical naming.
+    Runs under the engine state machine: ``IDLE`` -> ``SAVING`` -> ``IDLE``.
     """
-    return cmd_save(ctx, path)
+    engine = ctx.engine
+    if not engine:
+        raise ValueError("No engine available")
+
+    return _wrap_engine_command(
+        engine,
+        "save_workspace",
+        {EngineState.IDLE},
+        EngineState.SAVING,
+        lambda: cmd_save(ctx, path),
+        next_state=EngineState.IDLE,
+        next_state_reason="save_complete",
+    )
 
 
 def cmd_load_workspace(ctx, path: str) -> dict:
-    """Load a workspace — canonical command.
+    """Load a workspace from a new file path — canonical command.
 
-    Thin wrapper around :func:`cmd_load` for canonical naming.
+    Runs under the engine state machine: ``IDLE`` or ``FAULTED`` ->
+    ``LOADING`` -> ``IDLE``.
     """
-    return cmd_load(ctx, path)
+    engine = ctx.engine
+    if not engine:
+        raise ValueError("No engine available")
+
+    return _wrap_engine_command(
+        engine,
+        "load_workspace",
+        {EngineState.IDLE, EngineState.FAULTED},
+        EngineState.LOADING,
+        lambda: cmd_load(ctx, path),
+        is_recovery=True,
+        next_state=EngineState.IDLE,
+        next_state_reason="load_complete",
+    )
 
 
 def cmd_create_new_workspace(ctx, engine_type: str = "python") -> dict:

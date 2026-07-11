@@ -13,6 +13,8 @@ class StatusState(str, Enum):
     LOADING = "loading"
     SAVING = "saving"
     CALCULATING = "calculating"
+    CANCELLING = "cancelling"
+    UPDATING = "updating"
     ERROR = "error"
 
 
@@ -21,6 +23,8 @@ class StatusState(str, Enum):
 PRIORITY = {
     StatusState.LOADING: 2,
     StatusState.SAVING: 2,
+    StatusState.UPDATING: 2,
     StatusState.CALCULATING: 3,
+    StatusState.CANCELLING: 3,
     StatusState.ERROR: 4,
 }

@@ -1,6 +1,14 @@
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from lib_contracts.types import RuleValidationError
+from lib_openm.engine_state import (
+    EngineState,
+    EngineBusyError,
+    EngineFaultedError,
+    EngineShuttingDownError,
+)
 from lib_openm._engine_core import (
     _EngineCore,
     AddAggregateItemResult,
@@ -34,6 +42,49 @@ class Engine:
             super().__setattr__(name, value)
         else:
             setattr(self._core, name, value)
+
+    # ------------------------------------------------------------------
+    # Engine lifecycle / state machine (Phase 1)
+    # ------------------------------------------------------------------
+
+    def read_engine_state(self):
+        return self._core._state_machine.get_engine_state()
+
+    def read_engine_diagnostics(self):
+        return self._core._state_machine.get_diagnostics()
+
+    def execute_serialized_command(
+        self,
+        command_id: str,
+        allowed_states: set[EngineState],
+        target_state: EngineState,
+        body: Callable[[], Any],
+        *,
+        is_recovery: bool = False,
+        next_state: EngineState | None = None,
+        next_state_reason: str | None = None,
+    ) -> Any:
+        return self._core._state_machine.execute_serialized_command(
+            command_id,
+            allowed_states,
+            target_state,
+            body,
+            is_recovery=is_recovery,
+            next_state=next_state,
+            next_state_reason=next_state_reason,
+        )
+
+    def transition_to_state(self, new_state: EngineState, *, reason: str | None = None) -> None:
+        self._core._state_machine.transition_to(new_state, reason=reason)
+
+    def request_cancel_operation(self) -> None:
+        self._core._state_machine.request_cancel()
+
+    def is_cancel_operation_requested(self) -> bool:
+        return self._core._state_machine.is_cancel_requested()
+
+    def shutdown_engine(self) -> None:
+        self._core._state_machine.shutdown()
 
     @property
     def undo_manager(self):

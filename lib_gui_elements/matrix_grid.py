@@ -11,6 +11,7 @@ import string
 from typing import Any
 
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid
 
 # Debug flag for GUI - set DEBUG_GUI=true to enable verbose logging
 DEBUG_GUI = os.environ.get("DEBUG_GUI", "false").lower() in ("true", "1", "yes")
@@ -438,6 +439,12 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         self._formatted_tile_data_gens: dict[tuple[int, int, int, int], int] = {}
         self._plain_image_data_gens: dict[tuple[int, int, int, int], int] = {}
         self._image_data_gens: dict[tuple[int, int, int, int], int] = {}
+        # Fallback caches: previous tile images kept briefly during data reloads so
+        # the grid never shows blank cells while new tiles are still rendering.
+        self._tile_image_cache_fallback: dict[tuple[int, int, int, int], QtGui.QImage] = {}
+        self._tile_plain_cache_fallback: dict[tuple[int, int, int, int], QtGui.QImage] = {}
+        self._image_data_gens_fallback: dict[tuple[int, int, int, int], int] = {}
+        self._plain_image_data_gens_fallback: dict[tuple[int, int, int, int], int] = {}
         self._pending_tile_fetch: bool = False
         self._tile_fetch_suppressed: bool = False
         self._local_selection_change_in_progress: bool = False
@@ -1365,6 +1372,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
     def _start_tile_fetch(self) -> None:
         """Start formatted thread immediately (viewport-specific); plain thread is background prefetch."""
+        if not isValid(self):
+            return
         with self._span("MatrixGrid._start_tile_fetch"):
             self._start_tile_fetch_impl()
 
@@ -1488,11 +1497,13 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         generation=self._plain_generation,
                         data_gen=self._data_generation,
                         plain=True,
-                        parent=self,
+                        parent=None,
                         profiler=self._profiler,
                         parent_span_name=self._profiler.current_span_name() if self._profiler is not None else None,
                     )
                     plain_thread.tile_ready.connect(self._on_tile_ready)
+                    plain_thread.finished.connect(self._on_plain_thread_finished)
+                    plain_thread.finished.connect(plain_thread.deleteLater)
                     self._tile_fetch_thread_plain = plain_thread
                     plain_thread.start()
 
@@ -1531,12 +1542,13 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 generation=gen,
                 data_gen=self._data_generation,
                 plain=False,
-                parent=self,
+                parent=None,
                 profiler=self._profiler,
                 parent_span_name=self._profiler.current_span_name() if self._profiler is not None else None,
             )
             fmt_thread.tile_ready.connect(self._on_tile_ready)
             fmt_thread.finished.connect(self._on_tile_thread_finished)
+            fmt_thread.finished.connect(fmt_thread.deleteLater)
             self._tile_fetch_thread = fmt_thread
             self.tile_fetch_started.emit(self._view_id, tile_reason)
             fmt_thread.start()
@@ -1621,12 +1633,20 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                             self._tile_image_cache.pop(bounds, None)
                             self._image_data_gens.pop(bounds, None)
                             break
+                # A fresh plain tile also evicts the previous fallback image.
+                self._tile_plain_cache_fallback.pop(bounds, None)
+                self._plain_image_data_gens_fallback.pop(bounds, None)
             else:
                 self._tile_image_cache[bounds] = img
                 self._image_data_gens[bounds] = data_gen
                 # Evict plain fallback so plain tiles are only shown while formatted is not ready
                 self._tile_plain_cache.pop(bounds, None)
                 self._plain_image_data_gens.pop(bounds, None)
+                # A fresh formatted tile replaces the previous generation's fallback.
+                self._tile_image_cache_fallback.pop(bounds, None)
+                self._image_data_gens_fallback.pop(bounds, None)
+                self._tile_plain_cache_fallback.pop(bounds, None)
+                self._plain_image_data_gens_fallback.pop(bounds, None)
                 DEBUG_GUI and print(
                     f"DEBUG _on_tile_rendered: STORED fmt bounds={bounds} "
                     f"gen={generation} data_gen={data_gen} img_cache={len(self._tile_image_cache)}"
@@ -1647,10 +1667,20 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
     @QtCore.Slot()
     def _on_tile_thread_finished(self) -> None:
         """When formatted thread finishes, restart if a new viewport fetch was queued."""
+        thread = self.sender()
+        if self._tile_fetch_thread is thread:
+            self._tile_fetch_thread = None
         self.tile_fetch_finished.emit(self._view_id)
         fmt_running = self._is_thread_alive(self._tile_fetch_thread)
         if self._pending_tile_fetch and not fmt_running:
             self._start_tile_fetch()
+
+    @QtCore.Slot()
+    def _on_plain_thread_finished(self) -> None:
+        """Release the plain tile thread reference after it finishes."""
+        thread = self.sender()
+        if self._tile_fetch_thread_plain is thread:
+            self._tile_fetch_thread_plain = None
 
     def _render_tile_image(self, bounds: tuple[int, int, int, int], snapshot: dict[str, Any], plain: bool = False) -> QtGui.QImage | None:
         """Pre-render a tile's cells to a QImage. No selection overlay — that is drawn in paintEvent."""
@@ -1664,10 +1694,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         if w <= 0 or h <= 0:
             return None
 
-        img = QtGui.QImage(w, h, QtGui.QImage.Format.Format_ARGB32)
+        img = QtGui.QImage(w, h, QtGui.QImage.Format_ARGB32)
         img.fill(QtGui.QColor("white"))
         p = QtGui.QPainter(img)
-        p.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
+        p.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
         try:
             snapshot_cells = snapshot.get("cells", {})
             snapshot_channels = snapshot.get("channels", {})
@@ -1847,6 +1877,14 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             if bounds[0] <= r <= bounds[1] and bounds[2] <= c <= bounds[3]:
                 if self._plain_image_data_gens.get(bounds, -1) == self._data_generation:
                     return True
+        # During data reloads the previous generation's tile images act as a
+        # fallback so selection overlay and gridlines are still drawn.
+        for bounds in self._tile_image_cache_fallback:
+            if bounds[0] <= r <= bounds[1] and bounds[2] <= c <= bounds[3]:
+                return True
+        for bounds in self._tile_plain_cache_fallback:
+            if bounds[0] <= r <= bounds[1] and bounds[2] <= c <= bounds[3]:
+                return True
         return False
 
     def execute_command(self, command_id: str, **kwargs: Any) -> Any:
@@ -1900,6 +1938,12 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             self._data_generation += 1
             self._tile_generation += 1
             self._plain_generation += 1
+            # Preserve the previous rendered tiles as a fallback so the grid
+            # does not go blank while the new tile batch is still rendering.
+            self._tile_image_cache_fallback = dict(self._tile_image_cache)
+            self._tile_plain_cache_fallback = dict(self._tile_plain_cache)
+            self._image_data_gens_fallback = dict(self._image_data_gens)
+            self._plain_image_data_gens_fallback = dict(self._plain_image_data_gens)
             self._formatted_tile_data_gens.clear()
             self._plain_image_data_gens.clear()
             self._image_data_gens.clear()
@@ -2240,6 +2284,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         # Skip when _preserve_scroll is True so callers (rebuild_tabs, dropEvent,
         # header edit) own the final scroll position without timer races.
         def _restore_scroll():
+            if not isValid(self):
+                return
             if self._preserve_scroll:
                 return
             self.horizontalScrollBar().setValue(saved_h_scroll)
@@ -4324,7 +4370,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         # is empty, and QFrame::paintEvent can create an internal painter that
         # conflicts with our viewport painter in some Qt6/Fusion paths.
         p = QtGui.QPainter(self.viewport())
-        p.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
+        p.setRenderHint(QtGui.QPainter.TextAntialiasing, True)
         try:
 
             # F5c: use cached view metadata instead of paint-path get_view
@@ -4792,8 +4838,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             p.setClipRect(content_clip)
 
             # Blit pre-rendered tile images for visible tiles (base cell content)
-            # Formatted tiles first (full styling), then plain tiles as fallback
-            formatted_bounds = set(self._tile_image_cache.keys())
+            # Formatted tiles first (full styling), then plain tiles as fallback,
+            # then the previous data generation's tiles as a last resort so the
+            # grid never goes blank while a fresh batch is still rendering.
+            drawn_bounds: set[tuple[int, int, int, int]] = set()
             for tile_bounds, img in self._tile_image_cache.items():
                 t_first, t_last, t_fc, t_lc = tile_bounds
                 if t_last < first_row or t_first > last_row or t_lc < first_col or t_fc > last_col:
@@ -4804,18 +4852,40 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 tile_x = row_header_w + sum(self._col_width(i) for i in range(t_fc)) - x0
                 tile_y = header_h + t_first * self._m.row_h - y0
                 p.drawImage(tile_x, tile_y, img)
+                drawn_bounds.add(tile_bounds)
             for tile_bounds, img in self._tile_plain_cache.items():
-                if tile_bounds in formatted_bounds:
-                    continue  # formatted already drawn
                 t_first, t_last, t_fc, t_lc = tile_bounds
                 if t_last < first_row or t_first > last_row or t_lc < first_col or t_fc > last_col:
                     continue
                 # NEW: skip plain tiles with stale data
                 if self._plain_image_data_gens.get(tile_bounds, -1) != self._data_generation:
                     continue
+                if tile_bounds in drawn_bounds:
+                    continue  # formatted already drawn
                 tile_x = row_header_w + sum(self._col_width(i) for i in range(t_fc)) - x0
                 tile_y = header_h + t_first * self._m.row_h - y0
                 p.drawImage(tile_x, tile_y, img)
+                drawn_bounds.add(tile_bounds)
+            for tile_bounds, img in self._tile_image_cache_fallback.items():
+                if tile_bounds in drawn_bounds:
+                    continue
+                t_first, t_last, t_fc, t_lc = tile_bounds
+                if t_last < first_row or t_first > last_row or t_lc < first_col or t_fc > last_col:
+                    continue
+                tile_x = row_header_w + sum(self._col_width(i) for i in range(t_fc)) - x0
+                tile_y = header_h + t_first * self._m.row_h - y0
+                p.drawImage(tile_x, tile_y, img)
+                drawn_bounds.add(tile_bounds)
+            for tile_bounds, img in self._tile_plain_cache_fallback.items():
+                if tile_bounds in drawn_bounds:
+                    continue
+                t_first, t_last, t_fc, t_lc = tile_bounds
+                if t_last < first_row or t_first > last_row or t_lc < first_col or t_fc > last_col:
+                    continue
+                tile_x = row_header_w + sum(self._col_width(i) for i in range(t_fc)) - x0
+                tile_y = header_h + t_first * self._m.row_h - y0
+                p.drawImage(tile_x, tile_y, img)
+                drawn_bounds.add(tile_bounds)
 
             custom_borders: list[tuple[QtCore.QRect, CellFormat]] = []
 

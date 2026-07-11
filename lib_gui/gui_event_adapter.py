@@ -12,7 +12,12 @@ Deferred to later phases:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+
+from shiboken6 import isValid
+
+logger = logging.getLogger(__name__)
 
 
 class GUIEventAdapter:
@@ -118,20 +123,29 @@ class GUIEventAdapter:
         it falls back to a direct call.
         """
         if command_id in self._GRID_REFRESH_EXCLUDES:
+            logger.info("[GUIEventAdapter] command '%s' is in refresh excludes; no refresh", command_id)
             return
         if command_id not in self._GRID_COMMANDS:
             if not any(command_id.startswith(p) for p in self._GRID_REFRESH_PREFIXES):
+                logger.info("[GUIEventAdapter] command '%s' does not match refresh prefixes; no refresh", command_id)
                 return
+        logger.info("[GUIEventAdapter] command '%s' triggers ui refresh", command_id)
         from PySide6 import QtCore
-        if isinstance(self.gui_window, QtCore.QObject):
+        if isinstance(self.gui_window, QtCore.QObject) and isValid(self.gui_window):
             self.gui_window._refresh_gui_requested.emit()
         else:
-            self.gui_window.refresh_gui()
+            try:
+                self.gui_window.refresh_gui()
+            except RuntimeError:
+                pass
 
     def _emit_ui_status(self, error: str) -> None:
         """Show error status directly on the GUI window."""
         from PySide6 import QtCore
-        if isinstance(self.gui_window, QtCore.QObject):
+        if isinstance(self.gui_window, QtCore.QObject) and isValid(self.gui_window):
             self.gui_window._set_status_requested.emit("error", f"Error: {error}")
         else:
-            self.gui_window._flash_status_message(f"Error: {error}")
+            try:
+                self.gui_window._flash_status_message(f"Error: {error}")
+            except RuntimeError:
+                pass

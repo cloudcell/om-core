@@ -5,9 +5,8 @@ render cycle reads from it — no async stdout printing.
 """
 
 import threading
-from typing import Any
 
-from .config import DISC_FG, NOTICE_FG, NOTICE_BG
+from .config import DISC_FG
 
 
 class ReplState:
@@ -22,7 +21,6 @@ class ReplState:
         self._connected = True
         self._mt_recompute = False
         self._dirty_count = 0
-        self._pending_notices = 0
 
     # -- property accessors (thread-safe) --------------------------------
 
@@ -56,24 +54,6 @@ class ReplState:
         with self._lock:
             self._dirty_count = val
 
-    @property
-    def pending_notices(self) -> int:
-        with self._lock:
-            return self._pending_notices
-
-    @pending_notices.setter
-    def pending_notices(self, val: int) -> None:
-        with self._lock:
-            self._pending_notices = val
-
-    def increment_notices(self, n: int = 1) -> None:
-        with self._lock:
-            self._pending_notices += n
-
-    def reset_notices(self) -> None:
-        with self._lock:
-            self._pending_notices = 0
-
     # -- rendering --------------------------------------------------------
 
     def render(self) -> str:
@@ -84,6 +64,4 @@ class ReplState:
             parts.append(f" mt:{'on' if self._mt_recompute else 'off'} ")
             if self._dirty_count:
                 parts.append(f"dirty:{self._dirty_count}")
-            if self._pending_notices:
-                parts.append(f"<style bg='{NOTICE_BG}' fg='{NOTICE_FG}'> notices:{self._pending_notices} </style>")
             return "|".join(parts) if parts else ""

@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Optional, Iterable
 
 from lib_contracts.types import CircularReferenceError, RuleValidationError, CalculationCancelledError, SnapshotInvariantError
+from lib_openm.engine_state import _EngineStateMachine
 from lib_openm.rule_eval import CubeResolver, RuleEvaluator, parse_rule_target
 from lib_openm.rule_eval.utils import CellError
 from lib_openm.model import (
@@ -204,6 +205,10 @@ class _EngineCore:
         # Persistent worker pool (created on first MT recompute if reuse is enabled)
         self._worker_pool: Any | None = None
         self._calc_lock = threading.Lock()  # Lock for preventing concurrent recalculations
+        # Canonical lifecycle state machine and serialized-command guard.
+        self._state_machine = _EngineStateMachine(
+            event_publisher=event_publisher, engine_facade=self._facade
+        )
         from lib_openm.udf_registry import get_default_registry
         self.udf_registry = get_default_registry()
         # Reset all workspace-derived state from the initial workspace.

@@ -349,8 +349,6 @@ class OpenMREPLCore(cmd.Cmd):
                 print(msg)
         except queue.Empty:
             pass
-        if self._repl_state is not None:
-            self._repl_state.reset_notices()
 
     def _restore_terminal_echo(self) -> None:
         """Restore terminal echo in case the REPL exited abnormally.

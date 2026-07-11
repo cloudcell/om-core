@@ -78,9 +78,7 @@ class StatusDisplay:
                 pass
 
     def _print(self, text: str, *, event: Any | None = None) -> None:
-        """Queue status message for postcmd flush and update status bar."""
-        if self._repl_state is not None:
-            self._repl_state.increment_notices()
+        """Queue status message for postcmd flush."""
         if self._output_queue is not None:
             self._output_queue.put(text)
             return

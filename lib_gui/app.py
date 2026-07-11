@@ -9,6 +9,7 @@ import time
 import uuid
 from typing import Any
 from PySide6 import QtCore, QtGui, QtWidgets
+from shiboken6 import isValid
 
 from lib_utils.gui_profiler import GuiProfiler
 
@@ -606,6 +607,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Unique owner IDs for recalc lifecycles that span async signals.
         self._status_owner_id = 0
         self._dirty_recompute_owner: str | None = None
+        self._dirty_recompute_complete_pending: bool = False
         self._tile_fetch_grid: "MatrixGrid" | None = None
 
         # Debounce timer for UI refresh requests. A burst of bus events (e.g.
@@ -642,7 +644,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.session.subscribe("event.dimension_item.created", self._on_dimension_item_created_event)
         self.session.subscribe("event.dimension_item.deleted", self._on_dimension_item_deleted_event)
         self.session.subscribe("event.selection.changed", self._on_selection_changed_event)
-        self.session.subscribe("event.engine.status_changed", self._on_engine_status_changed)
+        self.session.subscribe("event.engine.state_changed", self._on_engine_state_changed)
 
         # Phase B: Register GUI event adapter for bus-first communication.
         # This must happen in BOTH local and remote mode so that command
@@ -895,6 +897,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stats_spinner_running: bool = False
         self._stats_spinner_index: int = 0
         self._stats_thread: QtCore.QThread | None = None
+        self._stats_pending: bool = False
         self._stats_generation: int = 0
         # Debounce timer: waits 100ms after the last selection change before
         # starting the stats query, so drag selection doesn't flood the thread
@@ -2739,13 +2742,39 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @QtCore.Slot(str, str, str)
     def _on_status_owner_request(self, action: str, owner: str, state: str) -> None:
-        """Push or pop a status owner from a thread-safe signal."""
+        """Push, update, or pop a status owner from a thread-safe signal."""
         if action == "begin":
             if not self._status_manager.has(owner):
                 self._status_manager.begin(owner, StatusState(state))
+        elif action == "update":
+            if self._status_manager.has(owner):
+                self._status_manager.update(owner, StatusState(state))
         elif action == "end":
             if self._status_manager.has(owner):
                 self._status_manager.end(owner)
+        elif action == "sync":
+            # Synchronise a single owner to an engine state string. Used by the
+            # event.engine.state_changed bridge so that the StatusManager is
+            # always touched on the GUI thread.
+            logger.info("[StatusOwner] sync owner=%s to state=%s", owner, state)
+            if state in ("idle", "shutting_down"):
+                if self._status_manager.has(owner):
+                    self._status_manager.end(owner)
+                return
+            mapped = {
+                "mutating": StatusState.CALCULATING,
+                "recalculating": StatusState.CALCULATING,
+                "cancelling": StatusState.CANCELLING,
+                "loading": StatusState.LOADING,
+                "saving": StatusState.SAVING,
+                "faulted": StatusState.ERROR,
+            }.get(state)
+            if mapped is None:
+                return
+            if self._status_manager.has(owner):
+                self._status_manager.update(owner, mapped)
+            else:
+                self._status_manager.begin(owner, mapped)
 
     @QtCore.Slot(str, str)
     def _on_tile_fetch_started(self, view_id: str, reason: str) -> None:
@@ -2796,6 +2825,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_status_changed(self, state: StatusState) -> None:
         """Render the current StatusState on the status indicator."""
         self._status_state = state.value
+        logger.info("[StatusBar] state changed to %s", state.value)
         if self._status_indicator is None:
             return
         labels = {
@@ -2803,6 +2833,8 @@ class MainWindow(QtWidgets.QMainWindow):
             StatusState.LOADING: "Loading…",
             StatusState.SAVING: "Saving…",
             StatusState.CALCULATING: "Calculating…",
+            StatusState.CANCELLING: "Cancelling…",
+            StatusState.UPDATING: "Updating…",
             StatusState.ERROR: "Error",
         }
         label = labels[state]
@@ -2819,6 +2851,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         try:
             self._status_indicator.setText(f"{icon} {label}")
+            self._status_indicator.repaint()
         except RuntimeError:
             return
         try:
@@ -2923,29 +2956,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self._ui_refresh_needs_browser = False
         logger.info("[MainWindow] execute_ui_refresh needs_browser=%s", needs_browser)
         t0 = time.perf_counter()
-        if needs_browser:
+        with self._status_manager.hold(StatusOwner.ui_refresh(), StatusState.UPDATING):
+            if needs_browser:
+                try:
+                    self._dock_browser.rebuild()
+                except RuntimeError:
+                    pass  # C++ object may have been destroyed (e.g., supplementary window closed)
             try:
-                self._dock_browser.rebuild()
-            except RuntimeError:
-                pass  # C++ object may have been destroyed (e.g., supplementary window closed)
-        try:
-            self._workspace.refresh_all_views()
-        except Exception:
-            pass
-        for win in list(self._workspace_windows):
-            try:
-                win.controller.refresh_all_views()
+                self._workspace.refresh_all_views()
             except Exception:
                 pass
-        try:
-            self._rule_panel.rebuild()
-        except Exception:
-            pass
-        for win in list(self._workspace_windows):
+            for win in list(self._workspace_windows):
+                try:
+                    win.controller.refresh_all_views()
+                except Exception:
+                    pass
             try:
-                win.controller.rebuild_rule_panel()
+                self._rule_panel.rebuild()
             except Exception:
                 pass
+            for win in list(self._workspace_windows):
+                try:
+                    win.controller.rebuild_rule_panel()
+                except Exception:
+                    pass
+        if self._dirty_recompute_complete_pending and self._dirty_recompute_owner is not None:
+            logger.info("[DirtyRecalc] UI refresh ending kept-alive owner=%s", self._dirty_recompute_owner)
+            self._status_manager.end(self._dirty_recompute_owner)
+            self._dirty_recompute_owner = None
+            self._dirty_recompute_complete_pending = False
         logger.info("[MainWindow] execute_ui_refresh done duration=%.3f ms", (time.perf_counter() - t0) * 1000)
 
 
@@ -3008,13 +3047,22 @@ class MainWindow(QtWidgets.QMainWindow):
         error = event.payload.get("error", "") if hasattr(event, "payload") else ""
         self._set_status_requested.emit("error", f"Save failed: {error}")
 
+    def _emit_status_owner_request(self, action: str, owner: str, state: str) -> None:
+        """Safely emit a status-owner request, swallowing errors if the window is destroyed."""
+        try:
+            if not isValid(self):
+                return
+            self._status_owner_request.emit(action, owner, state)
+        except RuntimeError:
+            pass
+
     def _on_calculation_started_event(self, event):
         """Handle event.calculation.started — push a CALCULATING owner."""
         correlation_id = getattr(event, "correlation_id", None)
         if not correlation_id:
             return
         owner = StatusOwner.recalc(correlation_id)
-        self._status_owner_request.emit("begin", owner, StatusState.CALCULATING.value)
+        self._emit_status_owner_request("begin", owner, StatusState.CALCULATING.value)
 
     def _on_calculation_finished_event(self, event):
         """Handle event.calculation.finished — end recalc owner."""
@@ -3022,7 +3070,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not correlation_id:
             return
         owner = StatusOwner.recalc(correlation_id)
-        self._status_owner_request.emit("end", owner, "")
+        self._emit_status_owner_request("end", owner, "")
 
     def _on_checkpoint_created_event(self, event):
         """Handle event.workspace.checkpoint_created — emit signal so slot runs on GUI thread."""
@@ -3034,28 +3082,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs_rebuild_requested.emit()
         self.timeline_switch_requested.emit()
 
-    def _on_engine_status_changed(self, event):
-        """Handle event.engine.status_changed events from the bus."""
+    def _on_engine_state_changed(self, event):
+        """Handle event.engine.state_changed events from the bus.
+
+        The actual StatusManager update is delegated to _status_owner_request so
+        it always runs on the GUI thread, even when the event is published from
+        a background worker.
+        """
         payload = event.payload if hasattr(event, "payload") else {}
-        level = payload.get("level", "ready")
-        owner = StatusOwner.engine()
-        if level == "ready":
-            if self._status_manager.has(owner):
-                self._status_manager.end(owner)
-            return
-        mapped = {
-            "computing": StatusState.CALCULATING,
-            "calculating": StatusState.CALCULATING,
-            "loading": StatusState.LOADING,
-            "saving": StatusState.SAVING,
-            "error": StatusState.ERROR,
-        }.get(level)
-        if mapped is None:
-            return
-        if self._status_manager.has(owner):
-            self._status_manager.update(owner, mapped)
-        else:
-            self._status_manager.begin(owner, mapped)
+        new_state = payload.get("new_state", "idle")
+        logger.info("[EngineState] event.engine.state_changed -> %s", new_state)
+        self._emit_status_owner_request("sync", StatusOwner.engine(), new_state)
 
     def _on_profiler_start(self, event: Any) -> None:
         """Handle event.profiler.start — marshal to GUI thread via signal."""
@@ -3598,11 +3635,31 @@ class MainWindow(QtWidgets.QMainWindow):
         # main thread so the GUI stays responsive and the spinner animates.
         self._stats_generation += 1
         gen = self._stats_generation
-        thread = StatsWorkerThread(self, view_id, gen, self)
+        if self._stats_thread is not None and self._stats_thread.isRunning():
+            # A query is already in flight; remember that the selection changed
+            # and start a fresh one when it finishes. This prevents multiple
+            # StatsWorkerThread objects from piling up while the engine is busy.
+            self._stats_pending = True
+            return
+
+        thread = StatsWorkerThread(self, view_id, gen, None)
         thread.result_ready.connect(self._on_stats_result)
+        thread.finished.connect(self._on_stats_thread_finished)
         thread.finished.connect(thread.deleteLater)
         thread.start()
         self._stats_thread = thread
+
+    @QtCore.Slot()
+    def _on_stats_thread_finished(self) -> None:
+        """Clean up the stats worker thread and restart if a new request queued."""
+        thread = self.sender()
+        if self._stats_thread is thread:
+            self._stats_thread = None
+        if isinstance(thread, QtCore.QThread):
+            thread.deleteLater()
+        if self._stats_pending:
+            self._stats_pending = False
+            self._do_update_selection_stats()
 
     def _on_stats_result(self, envelope: dict) -> None:
         """Receive result from StatsQueryThread and render if still current."""
@@ -3862,6 +3919,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._dirty_recompute_in_progress = True
         self._recompute_pending_again = False
         self._dirty_recompute_owner = StatusOwner.recalc(self._next_status_owner_id())
+        logger.info("[DirtyRecalc] begin owner=%s", self._dirty_recompute_owner)
         self._status_manager.begin(self._dirty_recompute_owner, StatusState.CALCULATING)
         self._suppress_tile_fetches(True)
 
@@ -3897,9 +3955,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self._start_dirty_recompute()
             return
 
-        if self._dirty_recompute_owner is not None:
-            self._status_manager.end(self._dirty_recompute_owner)
-            self._dirty_recompute_owner = None
         self._dirty_recompute_in_progress = False
         self._suppress_tile_fetches(False)
         for grid in self._iter_matrix_grids():
@@ -3910,6 +3965,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_rule_bar_from_current()
         self._sync_flow_panel_from_current()
         self._refresh_error_status(allow_from_computing=True)
+
+        # Keep the status owner alive until the coalesced UI refresh has run,
+        # so the bar does not drop back to "Waiting for command" while the
+        # GUI is still rebuilding. If no UI refresh is pending, end it now.
+        if self._ui_refresh_timer is None or not self._ui_refresh_timer.isActive():
+            if self._dirty_recompute_owner is not None:
+                logger.info("[DirtyRecalc] result ending owner=%s (no pending UI refresh)", self._dirty_recompute_owner)
+                self._status_manager.end(self._dirty_recompute_owner)
+                self._dirty_recompute_owner = None
+        else:
+            logger.info("[DirtyRecalc] result keeping owner=%s alive until UI refresh", self._dirty_recompute_owner)
+            self._dirty_recompute_complete_pending = True
 
     @QtCore.Slot(str)
     def _on_dirty_recompute_error(self, error_msg: str) -> None:

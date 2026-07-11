@@ -18,6 +18,10 @@ class StatusOwner:
         return f"recalc:{correlation_id}"
 
     @staticmethod
+    def ui_refresh() -> str:
+        return "ui_refresh"
+
+    @staticmethod
     def load(correlation_id: str) -> str:
         return f"load:{correlation_id}"
 

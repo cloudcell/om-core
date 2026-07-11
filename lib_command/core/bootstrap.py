@@ -46,6 +46,7 @@ from ..commands.rule import (
 from ..commands.system import (
     cmd_run_recalculation,
     cmd_cancel_recalculation,
+    cmd_cancel_operation,
     cmd_save_workspace,
     cmd_load_workspace,
 )
@@ -203,13 +204,23 @@ def register_default_commands(registry: CommandRegistry | None = None) -> Comman
             params={"scope": str}
         )
 
+    if not registry.is_registered("cancel_operation"):
+        registry.register(
+            "cancel_operation",
+            "Cancel Operation",
+            CommandCategory.CALCULATION,
+            cmd_cancel_operation,
+            shortcut="Esc",
+            description="Cancel an in-progress mutation, load, or recalculation",
+        )
+
     if not registry.is_registered("cancel_recalculation"):
         registry.register(
             "cancel_recalculation",
             "Cancel Recalculation",
             CommandCategory.CALCULATION,
             cmd_cancel_recalculation,
-            description="Cancel an in-progress recalculation",
+            description="Legacy alias for cancel_operation",
         )
 
     if not registry.is_registered("save_workspace"):
