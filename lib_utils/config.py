@@ -233,7 +233,7 @@ max_slice_cache_entries = 10000
 
 [performance]
 # Multi-threading
-enable_multithreading = true
+enable_multithreading = false
 parallel_threshold = 24
 reuse_worker_pool = true
 mt_batch_size = 8

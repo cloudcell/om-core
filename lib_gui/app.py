@@ -1229,7 +1229,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # If no saved state, show docks by default
         if not dock_state_data:
             self._dock_browser.show()
-            self._dock_info.show()
+            self._dock_info.hide()
             self._dock_format.hide()
             self._dock_perf.show()
             self._dock_timeline.show()
