@@ -4922,9 +4922,9 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         is_sel = True  # All cells selected when corner clicked
 
                     in_cached = self._cell_in_cached_tile_image(r_i, c)
-                    if in_cached:
-                        if is_sel:
-                            p.fillRect(cell_r, self._m.sel_bg)
+                    # Selected cells are painted fresh so the cached tile's text
+                    # is not double-drawn under the translucent selection overlay.
+                    if in_cached and not is_sel:
                         # Always redraw gridline for cached cells so shared borders survive overlays
                         p.setPen(self._m.gridline)
                         p.drawRect(cell_r)
