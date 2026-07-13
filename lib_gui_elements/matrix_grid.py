@@ -1364,6 +1364,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
         self._tile_cache.clear()
         self._tile_image_cache.clear()
         self._tile_plain_cache.clear()
+        self._tile_image_cache_fallback.clear()
+        self._tile_plain_cache_fallback.clear()
+        self._image_data_gens_fallback.clear()
+        self._plain_image_data_gens_fallback.clear()
         self._pending_cell_values.clear()
         self._force_tile_refetch = True
         self._pending_tile_fetch = True
@@ -1928,6 +1932,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
             self._formatted_tile_data_gens.clear()
             self._plain_image_data_gens.clear()
             self._image_data_gens.clear()
+            self._tile_image_cache_fallback.clear()
+            self._tile_plain_cache_fallback.clear()
+            self._image_data_gens_fallback.clear()
+            self._plain_image_data_gens_fallback.clear()
             self._pending_cell_values.clear()
             self._pending_tile_fetch = False
             self._force_tile_refetch = True

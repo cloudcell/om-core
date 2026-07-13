@@ -14,6 +14,7 @@ class FormattingHelper:
 
     def __init__(self, grid: "MatrixGrid") -> None:
         self._grid = grid
+        self._number_formatter_cache: dict[str, Any] = {}
 
     def apply_format_to_selection(
         self, format_type: str, value: object
@@ -404,14 +405,23 @@ class FormattingHelper:
             value: String representation of the value
             format_number: Format pattern like "number", "currency", "general"
         """
-        from .value_format import _format_number
+        from .value_format import _compile_number_formatter
 
         try:
             num = float(value)
         except (ValueError, TypeError):
             return value
 
-        return _format_number(num, format_number)
+        formatter = self._number_formatter_cache.get(format_number)
+        if formatter is None:
+            formatter = _compile_number_formatter(format_number)
+            self._number_formatter_cache[format_number] = formatter
+
+        return formatter(num)
+
+    def _clear_number_formatter_cache(self) -> None:
+        """Clear cached number formatters (for future invalidation hooks)."""
+        self._number_formatter_cache.clear()
 
 
 def get_contrast_font_color(bg_color: str | None,

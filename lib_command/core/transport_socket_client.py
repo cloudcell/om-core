@@ -368,10 +368,10 @@ class SocketTransportClient:
                             logger.warning("[transport-client] dispatching profiler start event")
                         # Match against wildcard subscription patterns (e.g.
                         # "command.*.succeeded" must match "command.restore_checkpoint.succeeded")
-                        for pattern, cbs in self._subscriptions.items():
+                        for pattern, cbs in list(self._subscriptions.items()):
                             from .message_bus import _topic_matches
                             if _topic_matches(pattern, topic):
-                                for cb in cbs:
+                                for cb in list(cbs):
                                     try:
                                         cb(event)
                                     except Exception:

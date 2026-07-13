@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import traceback
 from typing import Any
 
 from PySide6 import QtCore, QtWidgets
@@ -49,7 +50,7 @@ class RecalcWorker(QtCore.QObject):
             self.error.emit("Calculation cancelled")
             self.finished.emit(False)
         except Exception as e:
-            self.error.emit(str(e))
+            self.error.emit(f"{e}\n\n{traceback.format_exc()}")
             self.finished.emit(False)
 
     def request_cancel(self) -> None:

@@ -4,6 +4,7 @@ System commands - Save, load, recalc, quit operations.
 
 from __future__ import annotations
 
+import traceback
 from typing import Any, Optional
 
 from lib_command.core.domain_event_publisher import publish_domain_event
@@ -118,15 +119,16 @@ def cmd_recalc(ctx, scope: str = "all") -> dict:
         _publish_calculation_event("event.calculation.finished", correlation_id, result_scope, ok=True)
         return result
     except Exception as e:
+        error_text = f"{e}\n{traceback.format_exc()}"
         _publish_calculation_event(
-            "event.calculation.finished", correlation_id, result_scope, ok=False, error=str(e)
+            "event.calculation.finished", correlation_id, result_scope, ok=False, error=error_text
         )
         return {
             "scope": result_scope,
             "ok": False,
             "generation": engine.generation,
             "node_count": 0,
-            "error": str(e),
+            "error": error_text,
         }
 
 

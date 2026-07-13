@@ -608,6 +608,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._status_owner_id = 0
         self._dirty_recompute_owner: str | None = None
         self._dirty_recompute_complete_pending: bool = False
+        self._recompute_error_detail: str | None = None
         self._tile_fetch_grid: "MatrixGrid" | None = None
 
         # Debounce timer for UI refresh requests. A burst of bus events (e.g.
@@ -2409,6 +2410,8 @@ class MainWindow(QtWidgets.QMainWindow):
         one error somewhere, but the user has not yet placed the selection on
         a specific error cell.
         """
+        if self._recompute_error_detail is not None:
+            return self._recompute_error_detail
         if not self._active_view_exists():
             return None
         try:
@@ -3918,6 +3921,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._dirty_recompute_in_progress = True
         self._recompute_pending_again = False
+        self._recompute_error_detail = None
         self._dirty_recompute_owner = StatusOwner.recalc(self._next_status_owner_id())
         logger.info("[DirtyRecalc] begin owner=%s", self._dirty_recompute_owner)
         self._status_manager.begin(self._dirty_recompute_owner, StatusState.CALCULATING)
@@ -3942,6 +3946,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._on_dirty_recompute_error(result.get("error") or "Recompute failed")
             return
 
+        self._recompute_error_detail = None
         generation = result.get("generation")
 
         if self._recompute_pending_again:
@@ -3981,14 +3986,18 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot(str)
     def _on_dirty_recompute_error(self, error_msg: str) -> None:
         """Handle dirty recalculation failure on the GUI thread."""
-        logger.error("[MainWindow] dirty recompute error: %s", error_msg)
+        # Keep a concise headline for the status indicator; log the full traceback.
+        headline = error_msg.splitlines()[0] if error_msg else "Recompute failed"
+        self._recompute_error_detail = headline
+        logger.error("[MainWindow] dirty recompute error: %s\n%s", headline, error_msg)
         if self._dirty_recompute_owner is not None:
             self._status_manager.end(self._dirty_recompute_owner)
             self._dirty_recompute_owner = None
         self._dirty_recompute_in_progress = False
         self._recompute_pending_again = False
         self._suppress_tile_fetches(False)
-        self._flash_status_message(error_msg)
+        # Show the headline in the status bar long enough to read.
+        self.statusBar().showMessage(headline, 10000)
         self._refresh_error_status(allow_from_computing=True)
 
     def _sync_view_state_to_session_store(self) -> None:
