@@ -121,6 +121,7 @@ class SplashScreen:
         self._app.processEvents(QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
 
     def close(self) -> None:
+        self._widget.hide()
         self._widget.close()
 
     def set_progress(self, value: int, message: str = "") -> None:

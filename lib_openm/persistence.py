@@ -57,11 +57,13 @@ def _deserialize_value(v: Any) -> tuple[Any, bool]:
         # Legacy format: plain values - treat as hardcoded by default
         return (v, True)
     
-    vtype = v.get("_type")
+    vtype = v.get("_type") or v.get("type")
     is_hardcoded = v.get("hardcoded", False)  # New format includes hardcoded flag
     
     if vtype == "error":
-        code = v.get("code", "#EXPRESSION!")
+        code = v.get("code", v.get("value", "#EXPRESSION!"))
+        if code not in CellError._VALID_CODES:
+            code = v.get("value", "#EXPRESSION!")
         value = CellError(code) if code in CellError._VALID_CODES else None
     elif vtype == "null":
         value = None
@@ -69,6 +71,8 @@ def _deserialize_value(v: Any) -> tuple[Any, bool]:
         value = v.get("value", 0)
     elif vtype == "text":
         value = v.get("value", "")
+    elif vtype == "boolean":
+        value = v.get("value", False)
     else:
         # Unknown type - return raw dict for debugging
         value = v

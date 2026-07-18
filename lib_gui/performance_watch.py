@@ -176,6 +176,20 @@ class PerformanceWatchDock(QtWidgets.QDockWidget):
             "Top 5 rules by evaluation count."
         )
 
+        # Labels whose meaning changes when the remote engine is active.
+        self._fidelity_labels = (
+            self._slice_hits,
+            self._slice_misses,
+            self._func_hits,
+            self._func_misses,
+            self._prof_hit_rate,
+            self._prof_mt_avg_nodes,
+            self._prof_mt_avg_frontier,
+            self._prof_mt_max_frontier,
+            self._prof_mt_last_throughput,
+        )
+        self._original_tooltips = {label: label.toolTip() for label in self._fidelity_labels}
+
         self._prof_top_by_time_totals = QtWidgets.QLabel("count=0 | time=0.000 ms", self._profiler_group)
         self._prof_top_by_time_totals.setToolTip(
             "Totals across top 5 rules ranked by cumulative evaluation time."
@@ -301,11 +315,36 @@ class PerformanceWatchDock(QtWidgets.QDockWidget):
                 pass
         self.update_metrics()
 
+    def _apply_remote_fidelity(self, remote_active: bool) -> None:
+        """Gray out or annotate counters not produced by the remote engine."""
+        gray = "color: gray;" if remote_active else ""
+        suffix = "\n[Not available while the remote engine is active.]"
+        for label in self._fidelity_labels:
+            label.setStyleSheet(gray)
+            original = self._original_tooltips.get(label, "")
+            if remote_active:
+                label.setToolTip(original + suffix)
+            else:
+                label.setToolTip(original)
+
+        self._mt_toggle.setEnabled(not remote_active)
+        self._mt_group.setEnabled(not remote_active)
+
     def update_metrics(self) -> None:
         if self._session is None:
             return
         if hasattr(self._session, "is_connected") and not self._session.is_connected:
             return
+        try:
+            backend_info = self._session.query("diagnostics_engine_backend") or {}
+        except Exception as e:
+            logging.debug(f"PerformanceWatch: diagnostics_engine_backend failed: {e}")
+            backend_info = {}
+        remote_active = bool(
+            backend_info.get("type") == "remote" and backend_info.get("connected", False)
+        )
+        self._apply_remote_fidelity(remote_active)
+
         try:
             metrics = self._session.query("diagnostics_dependency_metrics") or {}
         except Exception as e:

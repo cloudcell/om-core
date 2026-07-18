@@ -1,7 +1,9 @@
 """Persistence ports.
 
-These abstract interfaces live outside the engine so the engine can be replaced
-without changing the persistence contract.
+The workspace persistence port (WorkspacePersistenceAdapter) is now defined
+in lib_openm.ports and re-exported here for backward compatibility.  The
+snapshot store ports remain here because they are persistence-layer concerns,
+not engine-consumed ports.
 """
 
 from __future__ import annotations
@@ -13,10 +15,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, NewType
 
+# Re-export the workspace persistence port from the engine-owned location.
+from lib_openm.ports import WorkspacePersistenceAdapter, WorkspaceLike
+
 WorkspaceId = NewType("WorkspaceId", str)
 SnapshotId = NewType("SnapshotId", str)
 BranchId = NewType("BranchId", str)
-WorkspaceLike = Any
 
 
 class SnapshotType(str, Enum):
@@ -52,34 +56,6 @@ class BranchInfo:
     name: str
     head_snapshot_id: SnapshotId | None
     created_at: datetime  # UTC, timezone-aware
-
-
-class WorkspacePersistenceAdapter(ABC):
-    """Port for workspace file save/load.
-
-    Lives outside the engine so the engine can be replaced without changing
-    the persistence contract.
-    """
-
-    @abstractmethod
-    def save_workspace(self, path: str | Path, workspace: WorkspaceLike) -> None:
-        """Persist the workspace to the given path.
-
-        This method must not mutate the workspace.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def load_workspace(self, path: str | Path) -> WorkspaceLike:
-        """Load and return a new workspace instance from the given path."""
-        raise NotImplementedError
-
-    @abstractmethod
-    def load_workspace_profiled(
-        self, path: str | Path
-    ) -> tuple[WorkspaceLike, dict]:
-        """Load a workspace and return it with a diagnostic profile."""
-        raise NotImplementedError
 
 
 class SnapshotStoreAdapter(ABC):

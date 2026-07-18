@@ -38,7 +38,7 @@ from .resolver import CubeResolver
 from .engine import RuleEvaluator
 
 # Dependency extraction
-from .deps import extract_refs
+from .deps import extract_refs, extract_trace_refs
 
 __all__ = [
     # Data models
@@ -84,4 +84,5 @@ __all__ = [
     "RuleEvaluator",
     # Dependency extraction
     "extract_refs",
+    "extract_trace_refs",
 ]

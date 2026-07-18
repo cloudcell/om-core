@@ -187,8 +187,43 @@ debug_calc_flow = false
 # This file contains all engine-related settings for the OM calculation engine
 
 [engine]
-# Default engine type: "python"
+# Default engine type: "python" or "remote"
+# "python"  — pure-Python engine (default, no external server needed)
+# "remote"  — delegate all operations to a remote engine server via RPC
 default_engine = "python"
+
+# ---------------------------------------------------------------------------
+# Remote engine configuration
+# ---------------------------------------------------------------------------
+# Used when default_engine = "remote" or OMENGINE_MODE=remote env var is set.
+#
+# endpoint:
+#   The RPC connection string. Supported schemes:
+#     unix:///path/to/socket   — Unix domain socket (recommended for local use)
+#     tcp://host:port          — TCP (use for remote servers or cross-machine)
+#
+# server_bin:
+#   Path to the remote server binary. This is launched automatically when:
+#     - endpoint is local (unix:// or tcp://localhost)
+#     - the server is not already running at that endpoint
+#   For remote endpoints (tcp://host:port where host != localhost),
+#   server_bin is ignored — the server is expected to be already running.
+#
+#   Can also be set via the OM_ENGINE_SERVER_BIN environment variable.
+#
+# endpoint can also be set via the OM_ENGINE_ENDPOINT environment variable.
+#
+# Example (local Unix socket):
+#   endpoint  = "unix:///tmp/om-engine.sock"
+#   server_bin = "/usr/local/bin/om-engine-server"
+#
+# Example (remote TCP server):
+#   endpoint  = "tcp://engine.example.com:7654"
+#   server_bin = ""   # not used for remote endpoints
+
+[remote]
+endpoint = "unix:///tmp/om-engine.sock"
+server_bin = "/usr/local/bin/om-engine-server"
 
 [persistence]
 # Whether to persist computed values (values calculated from formulas/rules)

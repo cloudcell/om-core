@@ -795,3 +795,87 @@ def ensure_group_in_graph(
         dim.invalidate_outline_cache()
 
     return group_id
+
+
+def extract_graph_for_remote(ws: "Workspace") -> dict | None:
+    """Extract the outline graph from %RECNOD/%RECEDG system cubes in msgpack format.
+
+    Returns a dict with "nodes" and "edges" arrays suitable for
+    remote engine consumption via loadFromMsgpack, or None if system cubes are missing.
+    """
+    recnodadr = _dim_by_name(ws, "%RECNODADR")
+    recnodfld = _dim_by_name(ws, "%RECNODFLD")
+    recnod = _cube_by_name(ws, "%RECNOD")
+    recedgadr = _dim_by_name(ws, "%RECEDGADR")
+    recedgfld = _dim_by_name(ws, "%RECEDGFLD")
+    recedg = _cube_by_name(ws, "%RECEDG")
+
+    if any(x is None for x in (recnodadr, recnodfld, recnod, recedgadr, recedgfld, recedg)):
+        return None
+
+    knd_id = _item_id(recnodfld, "KND")
+    dim_fld_id = _item_id(recnodfld, "DIM")
+    lbl_id = _item_id(recnodfld, "LBL")
+    ref_id = _item_id(recnodfld, "REF")
+    ord_id = _item_id(recnodfld, "ORD")
+
+    if any(x is None for x in (knd_id, dim_fld_id, lbl_id, ref_id)):
+        return None
+
+    nodes: list[dict] = []
+    for adr_item in recnodadr.items:
+        if adr_item.name == "NUL":
+            continue
+        node_dim = recnod.get((CHANNEL_TO_AT_ID["value"], adr_item.id, dim_fld_id))
+        if node_dim is None:
+            continue
+        kind = recnod.get((CHANNEL_TO_AT_ID["value"], adr_item.id, knd_id))
+        label = recnod.get((CHANNEL_TO_AT_ID["value"], adr_item.id, lbl_id))
+        ref = recnod.get((CHANNEL_TO_AT_ID["value"], adr_item.id, ref_id))
+        ord_val = recnod.get((CHANNEL_TO_AT_ID["value"], adr_item.id, ord_id))
+
+        node: dict = {
+            "id": adr_item.name,
+            "dim_id": node_dim,
+            "kind": "group" if kind == "GROUP" else "item_ref",
+            "label": label or adr_item.name,
+        }
+        if ref is not None:
+            node["item_ref"] = ref
+        if isinstance(ord_val, int):
+            node["root_ord"] = ord_val
+        nodes.append(node)
+
+    edge_knd_id = _item_id(recedgfld, "KND")
+    edge_src_id = _item_id(recedgfld, "SRC")
+    edge_tgt_id = _item_id(recedgfld, "TGT")
+    edge_dim_id = _item_id(recedgfld, "DIM")
+    edge_ord_id = _item_id(recedgfld, "ORD")
+
+    edges: list[dict] = []
+    if all(x is not None for x in (edge_knd_id, edge_src_id, edge_tgt_id, edge_dim_id)):
+        for edge_adr in recedgadr.items:
+            if edge_adr.name == "NUL":
+                continue
+            edge_dim = recedg.get((CHANNEL_TO_AT_ID["value"], edge_adr.id, edge_dim_id))
+            if edge_dim is None:
+                continue
+            src = recedg.get((CHANNEL_TO_AT_ID["value"], edge_adr.id, edge_src_id))
+            tgt = recedg.get((CHANNEL_TO_AT_ID["value"], edge_adr.id, edge_tgt_id))
+            ord_val = recedg.get((CHANNEL_TO_AT_ID["value"], edge_adr.id, edge_ord_id))
+            kind = recedg.get((CHANNEL_TO_AT_ID["value"], edge_adr.id, edge_knd_id))
+
+            edge: dict = {
+                "id": edge_adr.name,
+                "dim_id": edge_dim,
+                "kind": "aggreg_of" if kind == "AGGREG_OF" else "member_of",
+                "src": src or "",
+                "tgt": tgt or "",
+                "ord": ord_val if isinstance(ord_val, int) else 0,
+            }
+            edges.append(edge)
+
+    if not nodes:
+        return None
+
+    return {"nodes": nodes, "edges": edges}

@@ -463,6 +463,14 @@ class CalculationFlowPanel(QtWidgets.QWidget):
                     tgt_key = (tgt_cube, tuple(tgt_addr_raw))
                     edges.append((tgt_key, curr_key, "upstream"))
 
+                for target in row.get("dependent_targets") or []:
+                    tgt_cube = target.get("cube_id")
+                    tgt_addr_raw = target.get("addr")
+                    if not isinstance(tgt_cube, str) or not isinstance(tgt_addr_raw, (tuple, list)):
+                        continue
+                    tgt_key = (tgt_cube, tuple(tgt_addr_raw))
+                    edges.append((curr_key, tgt_key, "downstream"))
+
             if _FLOW_DEBUG:
                 print("FLOW_GRAPH: root", root_key)
 

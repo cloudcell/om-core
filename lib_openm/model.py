@@ -557,8 +557,9 @@ class Workspace:
         to include any missing TECHNICAL_CHANNELS items (for backward compatibility
         with old files that have partial channel sets).
 
-        Items are sorted so current TECHNICAL_CHANNELS come first (in defined order),
-        and any deprecated/extra items come last.
+        Existing items are kept in their original order; only newly added
+        canonical channels are appended at the end (in TECHNICAL_CHANNELS
+        order), followed by any deprecated/extra items in their original order.
         """
         if "@" not in self.dimensions:
             # Create new @ dimension with all channels in canonical order
@@ -573,43 +574,43 @@ class Workspace:
 
         # @ dimension exists - check for missing items and add them
         at_dim = self.dimensions["@"]
-        existing_items_by_name: dict[str, DimensionItem] = {item.name: item for item in at_dim.items}
+
+        # Preserve original order while migrating legacy IDs in place.
+        existing_items_by_name: dict[str, DimensionItem] = {}
+        new_items: list[DimensionItem] = []
+        tech_channels_set = set(TECHNICAL_CHANNELS)
+        deprecated_items: list[DimensionItem] = []
+
+        for item in at_dim.items:
+            canonical_id = f"{AT_PREFIX}{item.name}"
+            if item.name in tech_channels_set:
+                # Migrate legacy @. prefix to canonical at_ prefix in place.
+                if item.id.startswith("@.") and item.id != canonical_id:
+                    existing_items_by_name[item.name] = DimensionItem(id=canonical_id, name=item.name)
+                else:
+                    existing_items_by_name[item.name] = item
+                new_items.append(existing_items_by_name[item.name])
+            else:
+                deprecated_items.append(item)
+                new_items.append(item)
+
         existing_names = set(existing_items_by_name.keys())
 
-        # Migrate existing canonical channel items from old @. prefix to new at_ prefix
-        for ch in TECHNICAL_CHANNELS:
-            if ch in existing_items_by_name:
-                item = existing_items_by_name[ch]
-                canonical_id = f"{AT_PREFIX}{ch}"
-                if item.id.startswith("@.") and item.id != canonical_id:
-                    existing_items_by_name[ch] = DimensionItem(id=canonical_id, name=item.name)
-
-        # Find missing canonical channels
+        # Find missing canonical channels and append them in canonical order.
         missing_channels = [ch for ch in TECHNICAL_CHANNELS if ch not in existing_names]
-
         if missing_channels:
             print(f"[Workspace] Upgrading @ dimension: adding {len(missing_channels)} missing channel(s): {missing_channels}")
             for ch in missing_channels:
-                existing_items_by_name[ch] = DimensionItem(id=f"{AT_PREFIX}{ch}", name=ch)
+                new_items.append(DimensionItem(id=f"{AT_PREFIX}{ch}", name=ch))
 
-        # Find deprecated/extra items (not in TECHNICAL_CHANNELS)
-        tech_channels_set = set(TECHNICAL_CHANNELS)
-        deprecated_names = [name for name in existing_names if name not in tech_channels_set]
-
-        # Rebuild items list: canonical channels first (in TECHNICAL_CHANNELS order), then deprecated
-        new_items: list[DimensionItem] = []
-        # Add canonical channels in defined order
-        for ch in TECHNICAL_CHANNELS:
-            if ch in existing_items_by_name:
-                new_items.append(existing_items_by_name[ch])
-        # Add deprecated items last (alphabetically for stability)
-        for name in sorted(deprecated_names):
-            new_items.append(existing_items_by_name[name])
+        # Append deprecated/extra items in their original order.
+        if deprecated_items:
+            new_items.extend(deprecated_items)
 
         at_dim.items = new_items
 
-        if missing_channels or deprecated_names:
-            print(f"[Workspace] @ dimension now has {len(at_dim.items)} channels ({len(TECHNICAL_CHANNELS)} canonical, {len(deprecated_names)} deprecated)")
+        if missing_channels or deprecated_items:
+            print(f"[Workspace] @ dimension now has {len(at_dim.items)} channels ({len(TECHNICAL_CHANNELS)} canonical, {len(deprecated_items)} deprecated)")
 
     def add_dimension(self, dim: Dimension) -> None:
         # Check for duplicate names (case-insensitive, trimmed)

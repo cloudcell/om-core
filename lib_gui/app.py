@@ -866,6 +866,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # themselves so only the icon, not the text, changes colour.
         sb.setStyleSheet(f"QStatusBar {{ color: {gui_config('appearance', 'status_bar_text_color', '#000000')}; }}")
         sb.addWidget(self._status_indicator)
+        self._status_indicator.show()
 
         self._focus_indicator = QtWidgets.QLabel("Focus: —")
         self._focus_indicator.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -2853,8 +2854,11 @@ class MainWindow(QtWidgets.QMainWindow):
             else "🔴"
         )
         try:
-            self._status_indicator.setText(f"{icon} {label}")
+            text = f"{icon} {label}"
+            self._status_indicator.setText(text)
+            self._status_indicator.show()
             self._status_indicator.repaint()
+            logger.debug("[StatusBar] indicator text=%r visible=%s", text, self._status_indicator.isVisible())
         except RuntimeError:
             return
         try:
@@ -7877,9 +7881,10 @@ class MainWindow(QtWidgets.QMainWindow):
     # ------------------------------------------------------------------
 
     def _show_engine_menu(self) -> None:
-        """Show the engine selection menu.  Indicator widget removed; exec at cursor."""
+        """Show the engine selection menu at cursor."""
         menu = QtWidgets.QMenu(self)
         menu.addAction(self._actions.act_engine_python)
+        menu.addAction(self._actions.act_engine_remote)
         menu.exec(QtGui.QCursor.pos())
 
     def _on_engine_changed(self, engine_type: str) -> None:
@@ -7900,7 +7905,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if reply != QtWidgets.QMessageBox.StandardButton.Yes:
             # Revert menu selection
-            self._actions.act_engine_python.setChecked(True)
+            self._update_engine_indicator(current_type)
             return
 
         # Save preference
@@ -7911,6 +7916,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _get_current_engine_type(self) -> str:
         """Return the current engine type as string."""
+        import os
+        if os.environ.get("OMENGINE_MODE") == "remote":
+            return "remote"
         return "python"
 
     def _switch_to_engine(self, engine_type: str) -> None:
@@ -7944,8 +7952,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._dock_perf._refresh_callback = self._on_recalculate
             self._dock_perf._apply_state(desired_tracking, desired_mt)
 
-            # Engine indicator removed; just ensure menu checkbox is correct
-            self._actions.act_engine_python.setChecked(True)
+            # Ensure menu checkbox is correct
+            self._update_engine_indicator(engine_type)
 
             # Recalculate and refresh
             self.session.execute("run_recalculation", scope="all")
@@ -7963,18 +7971,20 @@ class MainWindow(QtWidgets.QMainWindow):
             logger.error("Engine switch failed: %s", e)
             # Revert to current engine in UI
             current = self._get_current_engine_type()
-            # Engine indicator removed; just ensure menu checkbox is correct
-            self._actions.act_engine_python.setChecked(current == "python")
+            self._update_engine_indicator(current)
         finally:
             self._status_manager.end(owner)
 
     def _update_engine_indicator(self, engine_type: str) -> None:
-        """Update the engine menu checkbox (indicator widget removed)."""
-        # Update menu checkbox only
+        """Update the engine menu checkbox."""
         self._actions.act_engine_python.setChecked(engine_type == "python")
+        self._actions.act_engine_remote.setChecked(engine_type == "remote")
 
     def _load_engine_preference(self) -> str:
-        """Load preferred engine from QSettings."""
+        """Load preferred engine from QSettings or env."""
+        import os
+        if os.environ.get("OMENGINE_MODE") == "remote":
+            return "remote"
         settings = QtCore.QSettings("OM Studio", "Application")
         return settings.value("calculation_engine", "python")  # type: ignore[return-value]
 

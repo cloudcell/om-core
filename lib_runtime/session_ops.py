@@ -40,15 +40,36 @@ def switch_engine(
     *,
     session: "CommandSession | None" = None,
     context: Any = None,
+    force_new: bool = False,
 ) -> Any:
     """Create a new engine for the given workspace and update session/context.
 
     Returns the new engine.
-    """
-    from lib_openm.api import Engine
-    from lib_command.core.engine_event_publisher import BusEventPublisher
 
-    new_engine = Engine(workspace, event_publisher=BusEventPublisher())
+    If the session/context already has an engine, it is reused —
+    ``replace_workspace`` is called on it so that a remote engine
+    keeps its server connection instead of being replaced by a Python one.
+    Pass ``force_new=True`` to always create a fresh engine (used by
+    ``cmd_set_engine`` when the user explicitly switches engine type).
+    """
+    if not force_new:
+        existing_engine = None
+        if session is not None and hasattr(session, "context") and session.context is not None:
+            existing_engine = getattr(session.context, "engine", None)
+        if existing_engine is None and context is not None:
+            existing_engine = getattr(context, "engine", None)
+
+        if existing_engine is not None:
+            existing_engine.replace_workspace(workspace)
+            if session is not None and hasattr(session, "context") and session.context is not None:
+                session.context.workspace = workspace
+            if context is not None:
+                context.workspace = workspace
+            return existing_engine
+
+    from lib_runtime.engine_factory import create_engine
+
+    new_engine = create_engine(workspace, engine_mode=engine_type)
     replace_session_workspace(
         session=session, context=context, engine=new_engine, workspace=workspace
     )
@@ -85,5 +106,5 @@ def load_workspace(
     from lib_storeadapters.json_file_adapter import JsonFileAdapter
 
     workspace, profile = JsonFileAdapter().load_workspace_profiled(path)
-    switch_engine(session, workspace, engine_type)
+    switch_engine(workspace, engine_type, session=session)
     return workspace, profile

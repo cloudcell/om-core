@@ -143,6 +143,10 @@ def run_with_splash(
         if getattr(win, '_recalculating', False) and win._recalc_thread is not None and win._recalc_thread.isRunning():
             print("[GUI] Application quitting during calculation - force terminating")
             os.kill(os.getpid(), signal.SIGKILL)
+        try:
+            runtime.engine.shutdown_engine()
+        except Exception:
+            pass
 
     app.aboutToQuit.connect(on_about_to_quit)
 
@@ -168,6 +172,7 @@ QTabBar::tab:!selected {
     )
 
     splash.close()
+    app.processEvents()
     win.show()
     win.restore_window_state_now()
     _set_macos_app_menu_title("OM Core")
@@ -247,6 +252,10 @@ def run_gui_in_thread() -> tuple[threading.Thread, Any, QtWidgets.QApplication, 
 
         def on_about_to_quit():
             win._save_window_state()
+            try:
+                runtime.engine.shutdown_engine()
+            except Exception:
+                pass
 
         app.aboutToQuit.connect(on_about_to_quit)
 
@@ -258,6 +267,7 @@ def run_gui_in_thread() -> tuple[threading.Thread, Any, QtWidgets.QApplication, 
 
         if splash is not None:
             splash.close()
+            app.processEvents()
         win.show()
         win.restore_window_state_now()
         _set_macos_app_menu_title("OM Core")
@@ -391,6 +401,7 @@ def start_gui(endpoint: Any | None = None) -> None:
         if splash is not None:
             splash.set_progress(100, 'Ready')
             splash.close()
+            app.processEvents()
 
         win.show()
         win.restore_window_state_now()

@@ -204,25 +204,31 @@ class ApplyFormatCommand:
 
     def __post_init__(self):
         self.description = f"Apply {self.format_key}"
-        cube = self.engine._get_cube(self.cube_id)
-        cell = self.engine._get_cell_by_addr(cube, self.address)
-        if cell and cell.format:
-            self.old_value = getattr(cell.format, self.format_key, None)
+        cube = self.engine.find_cube_by_id(self.cube_id)
+        if cube and cube.cell_formats:
+            key = f"{self.address}"
+            fmt = cube.cell_formats.get(key)
+            if fmt:
+                self.old_value = getattr(fmt, self.format_key, None)
 
     def do(self) -> None:
-        cube = self.engine._get_cube(self.cube_id)
-        cell = self.engine._get_cell_by_addr(cube, self.address)
-        if cell:
-            if not cell.format:
-                from lib_openm.model import CellFormat
-                cell.format = CellFormat()
-            setattr(cell.format, self.format_key, self.new_value)
+        cube = self.engine.find_cube_by_id(self.cube_id)
+        if cube:
+            from lib_openm.model import CellFormat
+            key = f"{self.address}"
+            fmt = cube.cell_formats.get(key)
+            if not fmt:
+                fmt = CellFormat()
+                cube.cell_formats[key] = fmt
+            setattr(fmt, self.format_key, self.new_value)
 
     def undo(self) -> None:
-        cube = self.engine._get_cube(self.cube_id)
-        cell = self.engine._get_cell_by_addr(cube, self.address)
-        if cell and cell.format:
-            setattr(cell.format, self.format_key, self.old_value)
+        cube = self.engine.find_cube_by_id(self.cube_id)
+        if cube and cube.cell_formats:
+            key = f"{self.address}"
+            fmt = cube.cell_formats.get(key)
+            if fmt:
+                setattr(fmt, self.format_key, self.old_value)
 
 
 @dataclass
@@ -267,15 +273,15 @@ class DeleteDimensionItemCommand:
                 'sequence': item.sequence,
             }
             # Store any cube cell overrides that reference this item
-            for cube in self.engine._ws.cubes.values():
+            ws = self.engine.workspace
+            for cube in ws.cubes.values():
                 if self.dim_id in cube.dimension_ids:
                     # Find all cells using this item
-                    for addr, cell in cube.cells.items():
+                    for addr in list(cube.data.keys()):
                         if self.item_id in addr:
                             self.cube_overrides[(cube.id, addr)] = {
-                                'value': cell.value,
-                                'rule_body': cell.rule_body,
-                                'format': cell.format,
+                                'value': cube.get(addr),
+                                'rule_body': cube.rule_bodies.get(addr) if hasattr(cube, 'rule_bodies') else None,
                             }
         self.description = f"Delete item '{self.item_data.get('name', 'Unknown')}'"
 
@@ -296,12 +302,11 @@ class DeleteDimensionItemCommand:
 
         # Restore cell overrides
         for (cube_id, addr), data in self.cube_overrides.items():
-            cube = self.engine._get_cube(cube_id)
-            cell = self.engine._get_cell_by_addr(cube, addr)
-            if cell:
-                cell.value = data['value']
-                cell.rule_body = data['rule_body']
-                cell.format = data['format']
+            cube = self.engine.find_cube_by_id(cube_id)
+            if cube:
+                cube.set(addr, data['value'])
+                if data.get('rule_body'):
+                    cube.set_rule_body(addr, data['rule_body'])
 
 
 @dataclass
@@ -344,11 +349,13 @@ class CreateDimensionCommand:
         from lib_openm.model import Dimension
         dim = Dimension.create(self.name, dim_type=self.dim_type)
         self.dim_id = dim.id
-        self.engine._ws.add_dimension(dim)
+        ws = self.engine.workspace
+        ws.add_dimension(dim)
 
     def undo(self) -> None:
         if self.dim_id:
-            self.engine._ws.dimensions.pop(self.dim_id, None)
+            ws = self.engine.workspace
+            ws.dimensions.pop(self.dim_id, None)
 
 
 @dataclass
@@ -371,7 +378,8 @@ class DeleteDimensionCommand:
         self.description = f"Delete dimension '{dim.name if dim else 'Unknown'}'"
 
     def do(self) -> None:
-        self.engine._ws.dimensions.pop(self.dim_id, None)
+        ws = self.engine.workspace
+        ws.dimensions.pop(self.dim_id, None)
 
     def undo(self) -> None:
         from lib_openm.model import Dimension, DimensionItem
@@ -382,7 +390,8 @@ class DeleteDimensionCommand:
         )
         for item_id, name, seq in self.dim_data['items']:
             dim.items.append(DimensionItem(id=item_id, name=name, sequence=seq))
-        self.engine._ws.add_dimension(dim)
+        ws = self.engine.workspace
+        ws.add_dimension(dim)
 
 
 @dataclass
@@ -401,11 +410,13 @@ class CreateCubeCommand:
         from lib_openm.model import Cube
         cube = Cube.create(self.name, dimension_ids=self.dimension_ids)
         self.cube_id = cube.id
-        self.engine._ws.add_cube(cube)
+        ws = self.engine.workspace
+        ws.add_cube(cube)
 
     def undo(self) -> None:
         if self.cube_id:
-            self.engine._ws.cubes.pop(self.cube_id, None)
+            ws = self.engine.workspace
+            ws.cubes.pop(self.cube_id, None)
 
 
 @dataclass
@@ -417,39 +428,30 @@ class DeleteCubeCommand:
     description: str = field(default="Delete cube", init=False)
 
     def __post_init__(self):
-        cube = self.engine._get_cube(self.cube_id)
+        cube = self.engine.find_cube_by_id(self.cube_id)
         if cube:
             self.cube_data = {
                 'id': cube.id,
                 'name': cube.name,
                 'dimension_ids': list(cube.dimension_ids),
-                'cells': {},
+                'data': dict(cube.data),
             }
-            for addr, cell in cube.cells.items():
-                self.cube_data['cells'][addr] = {
-                    'value': cell.value,
-                    'rule_body': cell.rule_body,
-                    'format': cell.format,
-                }
         self.description = f"Delete cube '{cube.name if cube else 'Unknown'}'"
 
     def do(self) -> None:
-        self.engine._ws.cubes.pop(self.cube_id, None)
+        ws = self.engine.workspace
+        ws.cubes.pop(self.cube_id, None)
 
     def undo(self) -> None:
-        from lib_openm.model import Cube, Cell
+        from lib_openm.model import Cube
         cube = Cube(
             id=self.cube_data['id'],
             name=self.cube_data['name'],
             dimension_ids=self.cube_data['dimension_ids'],
         )
-        for addr, data in self.cube_data['cells'].items():
-            cell = Cell()
-            cell.value = data['value']
-            cell.rule_body = data['rule_body']
-            cell.format = data['format']
-            cube.cells[addr] = cell
-        self.engine._ws.add_cube(cube)
+        cube.data = dict(self.cube_data['data'])
+        ws = self.engine.workspace
+        ws.add_cube(cube)
 
 
 @dataclass
@@ -470,11 +472,13 @@ class CreateViewCommand:
         from lib_openm.model import TableViewSpec
         view = TableViewSpec.create(self.name, self.cube_id, self.row_dim_id, self.col_dim_id)
         self.view_id = view.id
-        self.engine._ws.add_view(view)
+        ws = self.engine.workspace
+        ws.add_view(view)
 
     def undo(self) -> None:
         if self.view_id:
-            self.engine._ws.views.pop(self.view_id, None)
+            ws = self.engine.workspace
+            ws.views.pop(self.view_id, None)
 
 
 @dataclass
@@ -486,7 +490,8 @@ class DeleteViewCommand:
     description: str = field(default="Delete view", init=False)
 
     def __post_init__(self):
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             self.view_data = {
                 'id': view.id,
@@ -500,7 +505,8 @@ class DeleteViewCommand:
         self.description = f"Delete view '{view.name if view else 'Unknown'}'"
 
     def do(self) -> None:
-        self.engine._ws.views.pop(self.view_id, None)
+        ws = self.engine.workspace
+        ws.views.pop(self.view_id, None)
 
     def undo(self) -> None:
         from lib_openm.model import TableViewSpec
@@ -513,7 +519,8 @@ class DeleteViewCommand:
         )
         view.row_outline = self.view_data.get('row_outline', [])
         view.col_outline = self.view_data.get('col_outline', [])
-        self.engine._ws.add_view(view)
+        ws = self.engine.workspace
+        ws.add_view(view)
 
 
 @dataclass
@@ -526,18 +533,21 @@ class RenameViewCommand:
     description: str = field(default="Rename view", init=False)
 
     def __post_init__(self):
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             self.old_name = view.name
         self.description = f"Rename view to '{self.new_name}'"
 
     def do(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             view.name = self.new_name
 
     def undo(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             view.name = self.old_name
 
@@ -555,7 +565,8 @@ class MoveViewDimensionCommand:
     description: str = field(default="Move dimension", init=False)
 
     def __post_init__(self):
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             self.old_row_id = getattr(view, 'row_dim_id', None)
             self.old_col_id = getattr(view, 'col_dim_id', None)
@@ -566,7 +577,8 @@ class MoveViewDimensionCommand:
         self.engine.move_view_dimension(self.view_id, self.dim_id, self.dest)
 
     def undo(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if not view:
             return
         view.row_dim_id = self.old_row_id
@@ -586,7 +598,8 @@ class SetViewAxesCommand:
     description: str = field(default="Change view axes", init=False)
 
     def __post_init__(self):
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             self.old_row_dim_id = getattr(view, 'row_dim_id', None)
             self.old_col_dim_id = getattr(view, 'col_dim_id', None)
@@ -595,7 +608,8 @@ class SetViewAxesCommand:
         self.engine.set_view_axes(self.view_id, self.new_row_dim_id, self.new_col_dim_id)
 
     def undo(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             view.row_dim_id = self.old_row_dim_id
             view.col_dim_id = self.old_col_dim_id
@@ -616,7 +630,8 @@ class InsertOutlineNodeCommand:
         self.description = f"Insert {self.axis} outline node"
 
     def do(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if not view:
             return
         from lib_openm.model import OutlineNode
@@ -628,7 +643,8 @@ class InsertOutlineNodeCommand:
         self._insert_at_path(outline, self.parent_path, self.index, self.node_data)
 
     def undo(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if not view:
             return
         outline = getattr(view, f'{self.axis}_outline', None)
@@ -665,7 +681,8 @@ class DeleteOutlineNodeCommand:
     def __post_init__(self):
         self.description = f"Delete {self.axis} outline node"
         # Capture the node being deleted
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if view:
             node = self._get_node_at_path(
                 getattr(view, f'{self.axis}_outline', []),
@@ -679,7 +696,8 @@ class DeleteOutlineNodeCommand:
                 }
 
     def do(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if not view:
             return
         outline = getattr(view, f'{self.axis}_outline', None)
@@ -687,7 +705,8 @@ class DeleteOutlineNodeCommand:
             self._remove_at_path(outline, self.parent_path, self.index)
 
     def undo(self) -> None:
-        view = self.engine._ws.views.get(self.view_id)
+        ws = self.engine.workspace
+        view = ws.views.get(self.view_id)
         if not view:
             return
         from lib_openm.model import OutlineNode

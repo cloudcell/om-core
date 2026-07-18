@@ -106,6 +106,41 @@ class REPLCommandMixin:
         """Tab-completion fallback for arguments (also includes command names)."""
         return [c for c in self._all_command_names() if c.startswith(text)]
 
+    def do_engine(self: OpenMREPLCore, arg: str):
+        """
+        Show engine backend type and version.
+        Usage: engine [version]
+        """
+        session = getattr(self, "session", None)
+        ctx = getattr(session, "context", None) if session else None
+        engine = getattr(ctx, "engine", None) if ctx else None
+        info: dict | None = None
+        if engine is not None:
+            info = engine.engine_info()
+        elif session is not None and hasattr(session, "query"):
+            try:
+                info = session.query("diagnostics_engine_backend")
+            except Exception:
+                info = None
+        if not info:
+            print("No engine loaded")
+            return
+        backend = info.get("type", "python")
+        version = info.get("version", "unknown")
+        connected = info.get("connected", False)
+        server_version = info.get("server_version")
+        arg = (arg or "").strip().lower()
+        if arg in ("version", "v"):
+            print(f"Engine version: {version}")
+            if server_version:
+                print(f"Server version: {server_version}")
+        else:
+            conn_state = "connected" if connected else "disconnected"
+            print(f"Engine type: {backend} ({conn_state})")
+            print(f"Engine version: {version}")
+            if server_version:
+                print(f"Server version: {server_version}")
+
     def do_list(self: OpenMREPLCore, arg: str):
         """
         List available commands.

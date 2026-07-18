@@ -15,6 +15,7 @@ from typing import Any
 from lib_openm.api import Engine
 from lib_openm.model import Workspace, demo_workspace
 from lib_command.core.engine_event_publisher import BusEventPublisher
+from lib_runtime.engine_factory import create_engine
 from lib_storeadapters.json_file_adapter import JsonFileAdapter
 from lib_storeadapters.ports import SnapshotType
 from lib_storeadapters.sqlite_snapshot_adapter import SQLiteSnapshotStoreAdapter
@@ -77,8 +78,10 @@ def create_runtime_context(
     if workspace is None:
         workspace = demo_workspace()
 
-    engine = Engine(workspace, event_publisher=BusEventPublisher())
-    engine.enable_dependency_tracking(enable_dep_tracking)
+    engine = create_engine(
+        workspace,
+        enable_dependency_tracking=enable_dep_tracking,
+    )
 
     OM_SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     workspace_id = getattr(workspace, "id", None)

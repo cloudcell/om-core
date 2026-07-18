@@ -1837,11 +1837,17 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         v = "" if cell_value is None else str(cell_value)
 
                     font = QtGui.QFont(
-                        fmt.font_family if fmt.font_family else "sans-serif",
-                        fmt.font_size if fmt.font_size else 9,
+                        str(fmt.font_family) if fmt.font_family else "sans-serif",
+                        int(fmt.font_size) if fmt.font_size else 9,
                     )
-                    font.setWeight(QtGui.QFont.Weight(fmt.font_weight))
-                    font.setItalic(fmt.font_italic)
+                    if fmt.font_weight:
+                        try:
+                            fw = int(fmt.font_weight)
+                            fw = max(1, min(1000, fw))
+                            font.setWeight(QtGui.QFont.Weight(fw))
+                        except (ValueError, TypeError):
+                            pass
+                    font.setItalic(bool(fmt.font_italic))
                     p.setFont(font)
 
                     h_align = fmt.text_h_align
@@ -4493,10 +4499,16 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         p.setPen(QtGui.QColor(text_color))
 
                     # Set font from format
-                    font = QtGui.QFont(item_fmt.font_family if item_fmt.font_family else "sans-serif",
-                                       item_fmt.font_size if item_fmt.font_size else 9)
-                    font.setWeight(QtGui.QFont.Weight(item_fmt.font_weight))
-                    font.setItalic(item_fmt.font_italic)
+                    font = QtGui.QFont(str(item_fmt.font_family) if item_fmt.font_family else "sans-serif",
+                                       int(item_fmt.font_size) if item_fmt.font_size else 9)
+                    if item_fmt.font_weight:
+                        try:
+                            fw = int(item_fmt.font_weight)
+                            fw = max(1, min(1000, fw))
+                            font.setWeight(QtGui.QFont.Weight(fw))
+                        except (ValueError, TypeError):
+                            pass
+                    font.setItalic(bool(item_fmt.font_italic))
                     p.setFont(font)
 
                     # Show leaf label only (not group path like "Group / Jan").
@@ -4566,10 +4578,16 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     if not is_empty_band:
                         text_color = group_fmt.font_color if group_fmt.font_color else get_contrast_font_color(group_fmt.bg_color)
                         p.setPen(QtGui.QColor(text_color))
-                        font = QtGui.QFont(group_fmt.font_family if group_fmt.font_family else "sans-serif",
-                                           group_fmt.font_size if group_fmt.font_size else 9)
-                        font.setWeight(QtGui.QFont.Weight(group_fmt.font_weight))
-                        font.setItalic(group_fmt.font_italic)
+                        font = QtGui.QFont(str(group_fmt.font_family) if group_fmt.font_family else "sans-serif",
+                                           int(group_fmt.font_size) if group_fmt.font_size else 9)
+                        if group_fmt.font_weight:
+                            try:
+                                fw = int(group_fmt.font_weight)
+                                fw = max(1, min(1000, fw))
+                                font.setWeight(QtGui.QFont.Weight(fw))
+                            except (ValueError, TypeError):
+                                pass
+                        font.setItalic(bool(group_fmt.font_italic))
                         p.setFont(font)
                         align = self._get_text_alignment(group_fmt.text_h_align, group_fmt.text_v_align)
                         p.drawText(r.adjusted(4, 0, -4, 0), align, str(band.get("label") or ""))
@@ -4635,10 +4653,16 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                         p.setPen(QtGui.QColor(text_color))
 
                     # Set font from format
-                    font = QtGui.QFont(item_fmt.font_family if item_fmt.font_family else "sans-serif",
-                                       item_fmt.font_size if item_fmt.font_size else 9)
-                    font.setWeight(QtGui.QFont.Weight(item_fmt.font_weight))
-                    font.setItalic(item_fmt.font_italic)
+                    font = QtGui.QFont(str(item_fmt.font_family) if item_fmt.font_family else "sans-serif",
+                                       int(item_fmt.font_size) if item_fmt.font_size else 9)
+                    if item_fmt.font_weight:
+                        try:
+                            fw = int(item_fmt.font_weight)
+                            fw = max(1, min(1000, fw))
+                            font.setWeight(QtGui.QFont.Weight(fw))
+                        except (ValueError, TypeError):
+                            pass
+                    font.setItalic(bool(item_fmt.font_italic))
                     p.setFont(font)
 
                     txt = ""
@@ -4650,7 +4674,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     # Draw sigma for aggregate columns
                     if 0 <= c < len(self._cols) and self._cols[c].get("is_aggregate"):
                         small_font = QtGui.QFont(p.font())
-                        small_font.setPointSize(max(6, (item_fmt.font_size or 9) - 2))
+                        small_font.setPointSize(max(6, int(item_fmt.font_size or 9) - 2))
                         p.setFont(small_font)
                         p.drawText(r, QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight, "\u03A3")
                         p.setFont(font)
@@ -4715,10 +4739,16 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     # Set font color from format (auto-contrast if not explicitly set)
                     text_color = group_fmt.font_color if group_fmt.font_color else get_contrast_font_color(group_fmt.bg_color)
                     p.setPen(QtGui.QColor(text_color))
-                    font = QtGui.QFont(group_fmt.font_family if group_fmt.font_family else "sans-serif",
-                                       group_fmt.font_size if group_fmt.font_size else 9)
-                    font.setWeight(QtGui.QFont.Weight(group_fmt.font_weight))
-                    font.setItalic(group_fmt.font_italic)
+                    font = QtGui.QFont(str(group_fmt.font_family) if group_fmt.font_family else "sans-serif",
+                                       int(group_fmt.font_size) if group_fmt.font_size else 9)
+                    if group_fmt.font_weight:
+                        try:
+                            fw = int(group_fmt.font_weight)
+                            fw = max(1, min(1000, fw))
+                            font.setWeight(QtGui.QFont.Weight(fw))
+                        except (ValueError, TypeError):
+                            pass
+                    font.setItalic(bool(group_fmt.font_italic))
                     p.setFont(font)
                 
                     align = self._get_text_alignment(group_fmt.text_h_align, group_fmt.text_v_align)
@@ -4746,7 +4776,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                             badge_text = str(self._group_drag_badge_count)
                             p.save()
                             badge_font = QtGui.QFont(p.font())
-                            badge_font.setPointSize(max(7, (group_fmt.font_size or 9) - 1))
+                            badge_font.setPointSize(max(7, int(group_fmt.font_size or 9) - 1))
                             p.setFont(badge_font)
                             fm = QtGui.QFontMetrics(p.font())
                             tw = fm.horizontalAdvance(badge_text) + 8
@@ -4807,10 +4837,16 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     p.setPen(QtGui.QColor(text_color))
 
                 # Set font from format
-                font = QtGui.QFont(item_fmt.font_family if item_fmt.font_family else "sans-serif",
-                                   item_fmt.font_size if item_fmt.font_size else 9)
-                font.setWeight(QtGui.QFont.Weight(item_fmt.font_weight))
-                font.setItalic(item_fmt.font_italic)
+                font = QtGui.QFont(str(item_fmt.font_family) if item_fmt.font_family else "sans-serif",
+                                   int(item_fmt.font_size) if item_fmt.font_size else 9)
+                if item_fmt.font_weight:
+                        try:
+                            fw = int(item_fmt.font_weight)
+                            fw = max(1, min(1000, fw))
+                            font.setWeight(QtGui.QFont.Weight(fw))
+                        except (ValueError, TypeError):
+                            pass
+                font.setItalic(bool(item_fmt.font_italic))
                 p.setFont(font)
 
                 txt = ""
@@ -4822,7 +4858,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                 # Draw sigma for aggregate rows
                 if 0 <= r < len(self._rows) and self._rows[r].get("is_aggregate"):
                     small_font = QtGui.QFont(p.font())
-                    small_font.setPointSize(max(6, (item_fmt.font_size or 9) - 2))
+                    small_font.setPointSize(max(6, int(item_fmt.font_size or 9) - 2))
                     p.setFont(small_font)
                     p.drawText(rect, QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignRight, "\u03A3")
                     p.setFont(font)
@@ -4977,8 +5013,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                             text_pen = self._m.sel_fg if is_sel else QtGui.QColor("#202020")
                             p.setPen(text_pen)
                             font = QtGui.QFont(
-                                fmt.font_family if fmt.font_family else "sans-serif",
-                                fmt.font_size if fmt.font_size else 9,
+                                str(fmt.font_family) if fmt.font_family else "sans-serif",
+                                int(fmt.font_size) if fmt.font_size else 9,
                             )
                             p.setFont(font)
                             align = self._get_text_alignment(
@@ -5013,8 +5049,8 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                                     v = "" if cell_value is None else str(cell_value)
                                 p.setPen(self._m.sel_fg)
                                 font = QtGui.QFont(
-                                    fmt.font_family if fmt.font_family else "sans-serif",
-                                    fmt.font_size if fmt.font_size else 9,
+                                    str(fmt.font_family) if fmt.font_family else "sans-serif",
+                                    int(fmt.font_size) if fmt.font_size else 9,
                                 )
                                 p.setFont(font)
                                 align = self._get_text_alignment(
@@ -5124,11 +5160,17 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
                     # Set font
                     font = QtGui.QFont(
-                        fmt.font_family if fmt.font_family else "sans-serif",
-                        fmt.font_size if fmt.font_size else 9,
+                        str(fmt.font_family) if fmt.font_family else "sans-serif",
+                        int(fmt.font_size) if fmt.font_size else 9,
                     )
-                    font.setWeight(QtGui.QFont.Weight(fmt.font_weight))
-                    font.setItalic(fmt.font_italic)
+                    if fmt.font_weight:
+                        try:
+                            fw = int(fmt.font_weight)
+                            fw = max(1, min(1000, fw))
+                            font.setWeight(QtGui.QFont.Weight(fw))
+                        except (ValueError, TypeError):
+                            pass
+                    font.setItalic(bool(fmt.font_italic))
                     p.setFont(font)
 
                     # Default alignment: text left, numbers right. Honour any

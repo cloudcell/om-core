@@ -70,6 +70,7 @@ class MainWindowActions:
 
     # Engine actions
     act_engine_python: QtGui.QAction
+    act_engine_remote: QtGui.QAction
     engine_action_group: QtGui.QActionGroup
 
     # Tools actions
@@ -217,13 +218,19 @@ def create_actions(main_window: MainWindow) -> MainWindowActions:
     act_engine_python.setCheckable(True)
     act_engine_python.triggered.connect(lambda: mw._on_engine_changed("python"))
 
+    act_engine_remote = QtGui.QAction("Remote", mw)
+    act_engine_remote.setCheckable(True)
+    act_engine_remote.triggered.connect(lambda: mw._on_engine_changed("remote"))
+
     engine_action_group = QtGui.QActionGroup(mw)
     engine_action_group.addAction(act_engine_python)
+    engine_action_group.addAction(act_engine_remote)
     engine_action_group.setExclusive(True)
 
     # Set initial checked state based on loaded preference
     preferred = getattr(mw, '_preferred_engine', 'python')
     act_engine_python.setChecked(preferred == "python")
+    act_engine_remote.setChecked(preferred == "remote")
 
     # Tools actions
     act_options = QtGui.QAction("Options…", mw)
@@ -260,6 +267,7 @@ def create_actions(main_window: MainWindow) -> MainWindowActions:
         act_close_workspace=act_close_workspace,
         act_about=act_about,
         act_engine_python=act_engine_python,
+        act_engine_remote=act_engine_remote,
         engine_action_group=engine_action_group,
         act_toggle_debug_tooltips=act_toggle_debug_tooltips,
         act_options=act_options,

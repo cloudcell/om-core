@@ -88,6 +88,7 @@ def create_menus(main_window: MainWindow, actions: MainWindowActions) -> None:
     tools = mw.menuBar().addMenu("Tools")
     engine_menu = tools.addMenu("Calculation Engine")
     engine_menu.addAction(act.act_engine_python)
+    engine_menu.addAction(act.act_engine_remote)
     tools.addSeparator()
     tools.addAction(act.act_options)
 

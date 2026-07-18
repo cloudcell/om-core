@@ -60,7 +60,7 @@ def start_runtime(endpoint: Any | None = None) -> None:
     _shutdown_event = threading.Event()
 
     def _on_signal(signum, frame):
-        logger.info("Shutdown signal received (%s).", signum)
+        print(f"\nShutdown signal received ({signum}).")
         _shutdown_event.set()
 
     signal.signal(signal.SIGINT, _on_signal)
@@ -71,9 +71,15 @@ def start_runtime(endpoint: Any | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        logger.info("Shutting down runtime host...")
+        print("Shutting down runtime host...")
+        try:
+            ctx.engine.shutdown_engine()
+            print("  engine stopped.")
+        except Exception:
+            pass
         transport_server.stop()
-        logger.info("Runtime host stopped.")
+        print("  transport stopped.")
+        print("Runtime host stopped.")
 
 
 def _resolve_default_endpoint() -> Any:

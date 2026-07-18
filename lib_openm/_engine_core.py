@@ -31,7 +31,45 @@ from lib_openm.technical_ids import AT_PREFIX, CHANNEL_TO_AT_ID, normalize_techn
 from lib_openm.undo import Action, CompositeAction, UndoManager
 from lib_openm.deps import DependencyGraph
 from lib_openm.config import SLOW_LOG_THRESHOLD
+from lib_openm.ports import (
+    EVENT_CELL_UPDATED,
+    EVENT_CELLS_UPDATED,
+    EVENT_CUBE_CREATED,
+    EVENT_DIMENSION_CREATED,
+    EVENT_DIMENSION_DELETED,
+    EVENT_DIMENSION_ITEM_CREATED,
+    EVENT_DIMENSION_ITEM_RENAMED,
+    EVENT_DIMENSION_RENAMED,
+    EVENT_DIMENSION_STRUCTURE_CHANGED,
+    EVENT_VIEW_CREATED,
+    EVENT_VIEW_LAYOUT_CHANGED,
+    EVENT_WORKSPACE_DIRTY_CHANGED,
+)
 from lib_utils.config import engine as engine_config, compute_trace, is_compute_trace_enabled
+
+
+def _find_unquoted_equals(s: str) -> int:
+    """Return the index of the first '=' that is not inside a single- or double-quoted string.
+
+    Returns -1 if no unquoted '=' is found.
+    """
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(s):
+        ch = s[i]
+        if ch == '\\' and i + 1 < len(s):
+            i += 2
+            continue
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif ch == '=' and not in_single and not in_double:
+            return i
+        i += 1
+    return -1
+
 
 @dataclass
 class AddAggregateItemResult:
@@ -1130,7 +1168,7 @@ class _EngineCore:
         cube = self._ws.cubes.get(cube_id)
         if cube is not None:
             value = cube.get(addr)
-            self._publish_event("cell.updated", {
+            self._publish_event(EVENT_CELL_UPDATED, {
                 "cube_id": cube_id,
                 "addr": addr,
                 "value": value,
@@ -2410,75 +2448,22 @@ class _EngineCore:
 
         out: list[tuple[Cube, tuple[str, ...]]] = []
         for state in addr_states:
-            if any(part is None for part in state):
+            final = list(state)
+            for idx, dim_id in enumerate(target_cube.dimension_ids):
+                if idx < len(final) and final[idx] is None:
+                    dim = self._ws.dimensions.get(dim_id)
+                    if dim and dim.items:
+                        final[idx] = dim.items[0].id
+            if any(part is None for part in final):
                 continue
-            out.append((target_cube, tuple(part for part in state if part is not None)))
+            out.append((target_cube, tuple(final)))
             if len(out) >= max_results:
                 break
         return out
 
     def _extract_trace_refs(self, expression: str) -> list[tuple[str | None, list[tuple[str, str]]]]:
-        refs: list[tuple[str | None, list[tuple[str, str]]]] = []
-
-        cube_wildcard_pattern = re.compile(
-            r"(?<![A-Za-z0-9_])(?P<cube>[A-Za-z_%][A-Za-z0-9_%]*(?:\.[A-Za-z_%][A-Za-z0-9_%]*)*)\s*::\s*(?P<body>\*\s*(?:\.\s*\*)?)?(?=$|[\s+\-*/^(),%<>!=])"
-        )
-        for match in cube_wildcard_pattern.finditer(expression):
-            cube_name = match.group("cube")
-            body = (match.group("body") or "").strip()
-            if cube_name:
-                if body and not body.startswith("*"):
-                    continue
-                refs.append((cube_name, [("*", "*")]))
-
-        cube_qualified_pattern = re.compile(
-            r"(?<![A-Za-z0-9_])(?P<cube>[A-Za-z_%][A-Za-z0-9_%]*(?:\.[A-Za-z_%][A-Za-z0-9_%]*)*)\s*::\s*(?P<dim>[A-Za-z_%][A-Za-z0-9_%]*)\s*[.:]\s*(?P<item>[A-Za-z0-9_][A-Za-z0-9_]*)"
-        )
-        for match in cube_qualified_pattern.finditer(expression):
-            cube_name = match.group("cube")
-            dim_name = match.group("dim")
-            item_name = match.group("item")
-            if cube_name and dim_name and item_name:
-                refs.append((cube_name, [(dim_name, item_name)]))
-
-        bracket_pattern = re.compile(
-            r"(?:(?P<cube>[A-Za-z_%][A-Za-z0-9_%]*(?:\.[A-Za-z_%][A-Za-z0-9_%]*)*)\s*::\s*)?\[(?P<body>(?:[^\[\]]|\[[^\[\]]*\])*)\]"
-        )
-        for match in bracket_pattern.finditer(expression):
-            segment = match.group("body").strip()
-            if not segment:
-                continue
-            try:
-                parsed = parse_rule_target(f"[{segment}]")
-            except Exception:
-                continue
-            refs.append((match.group("cube"), parsed))
-
-        # Parse loose Dim.Item refs only outside bracketed refs and cube-qualified refs.
-        # First remove bracketed segments, then remove cube-qualified patterns.
-        expr_cleaned = bracket_pattern.sub(lambda m: " " * (m.end() - m.start()), expression)
-        expr_cleaned = cube_qualified_pattern.sub(lambda m: " " * (m.end() - m.start()), expr_cleaned)
-        for match in re.finditer(
-            r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_\s]*)\s*[:.]\s*([A-Za-z0-9_][A-Za-z0-9_\s*]*)",
-            expr_cleaned,
-        ):
-            dim_name = match.group(1).strip()
-            item_name = match.group(2).strip()
-            if dim_name and item_name:
-                refs.append((None, [(dim_name, item_name)]))
-
-        out: list[tuple[str | None, list[tuple[str, str]]]] = []
-        seen: set[tuple[str | None, tuple[tuple[str, str], ...]]] = set()
-        for cube_name, pairs in refs:
-            key = (
-                cube_name.strip().lower() if cube_name else None,
-                tuple((dim.strip().lower(), item.strip()) for dim, item in pairs),
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append((cube_name, pairs))
-        return out
+        from lib_openm.rule_eval.deps import extract_trace_refs as _extract_trace_refs_fn
+        return _extract_trace_refs_fn(expression)
 
     def _is_whole_cube_rule_mask(
         self,
@@ -3029,7 +3014,7 @@ class _EngineCore:
             dependent_targets: list[dict[str, Any]] = []
             dependents: list[str] = []
             dependents_truncated = False
-            if depth == 0:
+            if depth < max_depth:
                 dependent_entries, dependents_truncated = self._find_dependents_for_addr(
                     curr_cube,
                     curr_addr,
@@ -3059,8 +3044,8 @@ class _EngineCore:
                     "precedent_targets": precedent_targets,
                     "dependents": dependents,
                     "dependent_targets": dependent_targets,
-                    "dependents_truncated": dependents_truncated if depth == 0 else False,
-                    "dependents_limit": max_precedents_per_node if depth == 0 else None,
+                    "dependents_truncated": dependents_truncated if depth < max_depth else False,
+                    "dependents_limit": max_precedents_per_node if depth < max_depth else None,
                 }
             )
 
@@ -3265,7 +3250,7 @@ class _EngineCore:
                 raise ValueError(f"Dimension with name '{name}' already exists")
         dim = Dimension.create(name.strip(), dim_type=dim_type)
         self._ws.add_dimension(dim)
-        self._publish_event("dimension.created", {
+        self._publish_event(EVENT_DIMENSION_CREATED, {
             "dim_id": dim.id,
             "name": dim.name,
             "dim_type": dim.dim_type,
@@ -3295,7 +3280,7 @@ class _EngineCore:
                 raise KeyError(f"Unknown dimension id {did}")
         cube = Cube.create(name.strip(), dimension_ids)
         self._ws.add_cube(cube)
-        self._publish_event("cube.created", {
+        self._publish_event(EVENT_CUBE_CREATED, {
             "cube_id": cube.id,
             "name": cube.name,
             "dimension_ids": cube.dimension_ids,
@@ -3334,7 +3319,7 @@ class _EngineCore:
         if layout is not None:
             apply_layout_to_view(view, layout)
         self._ws.add_view(view)
-        self._publish_event("view.created", {
+        self._publish_event(EVENT_VIEW_CREATED, {
             "view_id": view.id,
             "name": view.name,
             "cube_id": view.cube_id,
@@ -3350,7 +3335,7 @@ class _EngineCore:
         """
         view = self._ws.views[view_id]
         apply_layout_to_view(view, layout)
-        self._publish_event("view.layout_changed", {
+        self._publish_event(EVENT_VIEW_LAYOUT_CHANGED, {
             "view_id": view_id,
             "cube_id": view.cube_id,
         })
@@ -3404,7 +3389,7 @@ class _EngineCore:
             view.col_dim_ids = [d for d in view.col_dim_ids if d != dim_id]
             view.page_dim_ids = [d for d in view.page_dim_ids if d != dim_id]
         del self._ws.dimensions[dim_id]
-        self._publish_event("dimension.deleted", {
+        self._publish_event(EVENT_DIMENSION_DELETED, {
             "dim_id": dim_id,
             "affected_view_ids": affected_view_ids,
         })
@@ -3434,7 +3419,7 @@ class _EngineCore:
                 if view.row_dim_ids and view.row_dim_ids[0] == dim_id:
                     from lib_openm.model import OutlineNode
                     view.row_outline.append(OutlineNode(label=item.name, item_id=item.id, children=[]))
-        self._publish_event("dimension_item.created", {
+        self._publish_event(EVENT_DIMENSION_ITEM_CREATED, {
             "dim_id": dim_id,
             "item_id": item.id,
             "name": item.name,
@@ -3518,7 +3503,7 @@ class _EngineCore:
         for view_id, old_keys, old_widths in affected_views:
             self._remap_view_col_widths(view_id, old_keys, old_widths)
 
-        self._publish_event("dimension.structure_changed", {
+        self._publish_event(EVENT_DIMENSION_STRUCTURE_CHANGED, {
             "dim_id": dim_id,
             "change_type": "item_order",
             "item_ids": item_ids,
@@ -4195,7 +4180,7 @@ class _EngineCore:
         if self._on_dimension_renamed is not None:
             self._on_dimension_renamed()
         # Phase E: Publish domain event for GUI adapter
-        self._publish_event("dimension.renamed", {
+        self._publish_event(EVENT_DIMENSION_RENAMED, {
             "dimension_id": dim_id,
             "old_name": old_name,
             "new_name": new_name,
@@ -4263,7 +4248,7 @@ class _EngineCore:
                 self._on_dimension_item_renamed(dim_id, item_id, new_name)
             # Phase E: Publish domain event for GUI adapter
             self._publish_event(
-                "dimension_item.renamed",
+                EVENT_DIMENSION_ITEM_RENAMED,
                 {
                     "dimension_id": dim_id,
                     "item_id": item_id,
@@ -4605,7 +4590,7 @@ class _EngineCore:
                 continue
             view.page_dim_ids.append(dim_id)
             view.page_selections[dim_id] = default_item_id
-            self._publish_event("view.layout_changed", {
+            self._publish_event(EVENT_VIEW_LAYOUT_CHANGED, {
                 "view_id": view.id,
                 "cube_id": view.cube_id,
             })
@@ -5232,15 +5217,20 @@ class _EngineCore:
                     value=CellError("#NUM!"),
                     explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#NUM!"),
                 )
-            except ValueError:
+            except TypeError:
                 return CellValue(
-                    value=CellError("#NUM!"),
-                    explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#NUM!"),
+                    value=CellError("#VALUE!"),
+                    explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#VALUE!"),
                 )
             except CircularReferenceError:
                 return CellValue(
                     value=CellError("#CIRC!"),
                     explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#CIRC!"),
+                )
+            except SyntaxError:
+                return CellValue(
+                    value=CellError("#SYNTAX!"),
+                    explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#SYNTAX!"),
                 )
             except RuleValidationError:
                 return CellValue(
@@ -5277,15 +5267,20 @@ class _EngineCore:
                 value=CellError("#NUM!"),
                 explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#NUM!"),
             )
-        except ValueError:
+        except TypeError:
             return CellValue(
-                value=CellError("#NUM!"),
-                explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#NUM!"),
+                value=CellError("#VALUE!"),
+                explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#VALUE!"),
             )
         except CircularReferenceError:
             return CellValue(
                 value=CellError("#CIRC!"),
                 explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#CIRC!"),
+            )
+        except SyntaxError:
+            return CellValue(
+                value=CellError("#SYNTAX!"),
+                explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#SYNTAX!"),
             )
         except RuleValidationError:
             return CellValue(
@@ -8355,6 +8350,16 @@ class _EngineCore:
                 cube.set(addr, err)
                 success = True
                 return err
+            except TypeError:
+                err = CellError("#VALUE!")
+                cube.set(addr, err)
+                success = True
+                return err
+            except SyntaxError:
+                err = CellError("#SYNTAX!")
+                cube.set(addr, err)
+                success = True
+                return err
             except RuleValidationError:
                 # Surface validation failures (e.g. invalid dynamic bounds)
                 # to callers instead of mapping them to EXPRESSION!.
@@ -8511,6 +8516,11 @@ class _EngineCore:
                     value=CellError("#NUM!"),
                     explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#NUM!"),
                 )
+            except TypeError:
+                return CellValue(
+                    value=CellError("#VALUE!"),
+                    explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#VALUE!"),
+                )
             except CircularReferenceError:
                 return CellValue(
                     value=CellError("#CIRC!"),
@@ -8545,6 +8555,11 @@ class _EngineCore:
             return CellValue(
                 value=CellError("#NUM!"),
                 explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#NUM!"),
+            )
+        except TypeError:
+            return CellValue(
+                value=CellError("#VALUE!"),
+                explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#VALUE!"),
             )
         except CircularReferenceError:
             return CellValue(
@@ -8971,7 +8986,7 @@ class _EngineCore:
         # Phase 4: emit batch cell update event
         changed_addrs = list(values.keys()) + list(rules.keys())
         if changed_addrs:
-            self._publish_event("cells.updated", {
+            self._publish_event(EVENT_CELLS_UPDATED, {
                 "cube_id": cube_id,
                 "addresses": changed_addrs,
                 "count": len(changed_addrs),
@@ -9178,7 +9193,7 @@ class _EngineCore:
     def _normalize_expression(self, expression: str) -> str:
         """
         Accept assignment-like input (e.g., "Quarter[THIS]=Quarter[PREV]*1.05") and keep only the RHS.
-        Avoid touching comparison operators.
+        Avoid touching comparison operators and '=' inside quoted strings.
         """
         expr = expression.strip()
         if not expr:
@@ -9187,15 +9202,14 @@ class _EngineCore:
         # Skip if equality/inequality tokens are present.
         if any(tok in expr for tok in ("==", "<=", ">=", "!=", "<>")):
             return expr
-        if "=" in expr:
-            eq_pos = expr.find("=")
+        # Find the first '=' that is NOT inside a quoted string.
+        eq_pos = _find_unquoted_equals(expr)
+        if eq_pos >= 0:
             # If there's an opening paren before '=', assume it's a comparison (e.g., IF(cond)) not an assignment.
             if "(" not in expr[:eq_pos]:
-                lhs, rhs = expr.split("=", 1)
+                rhs = expr[eq_pos + 1:]
                 if rhs.strip():
                     expr = rhs.strip()
-        import re
-
         return expr
 
     # ------------------------------------------------------------------
@@ -9520,7 +9534,7 @@ class _EngineCore:
         """Internal: Mark workspace as dirty (called after any undoable operation)."""
         self._mark_dirty_hook()
         # Phase E: Publish domain event for GUI adapter
-        self._publish_event("workspace.dirty_changed", {
+        self._publish_event(EVENT_WORKSPACE_DIRTY_CHANGED, {
             "is_dirty": True,
             "source": "undoable_operation",
         })

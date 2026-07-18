@@ -70,6 +70,19 @@ class RuleEvaluator:
                 return CellError("#NUM!")
         return value
 
+    @staticmethod
+    def _coerce_number(value: Any) -> Any:
+        """Coerce a value to float for numeric operations.
+
+        Returns CellError("#VALUE!") if the value cannot be converted.
+        """
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return CellError("#VALUE!")
+
     def _eval_or_error(
         self, node: Any, resolver: CubeResolver | None, addr: tuple[str, ...]
     ) -> Any:
@@ -320,10 +333,10 @@ class RuleEvaluator:
 
         if isinstance(node, _AstBinOp):
             l = self._eval(node.l, resolver, addr, volatile_seq)
-            r = self._eval(node.r, resolver, addr, volatile_seq)
-            # Propagate CellError values from operands
+            # Left-error-wins: return left error before evaluating right operand
             if self._is_error(l):
                 return l
+            r = self._eval(node.r, resolver, addr, volatile_seq)
             if self._is_error(r):
                 return r
             op = node.op
@@ -1107,14 +1120,30 @@ class RuleEvaluator:
     def _fn_abs(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else abs(v)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return abs(v)
 
     def _fn_round(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, min_args=1, max_args=2)
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
-        places = int(self._eval(node.args[1], resolver, addr)) if len(node.args) == 2 else 0
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        places = 0
+        if len(node.args) == 2:
+            p = self._eval(node.args[1], resolver, addr)
+            if self._is_error(p):
+                return p
+            p = self._coerce_number(p)
+            if self._is_error(p):
+                return p
+            places = int(p)
         return round(v, places)
 
     def _fn_pi(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
@@ -1126,6 +1155,9 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
         if v <= 0:
             return CellError("#NUM!")
         return math.log(v)
@@ -1135,10 +1167,16 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
         if v <= 0:
             return CellError("#NUM!")
         if len(node.args) == 2:
             base = self._eval(node.args[1], resolver, addr)
+            if self._is_error(base):
+                return base
+            base = self._coerce_number(base)
             if self._is_error(base):
                 return base
             if base <= 0 or base == 1:
@@ -1154,6 +1192,9 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
         if v <= 0:
             return CellError("#NUM!")
         return math.log10(v)
@@ -1161,6 +1202,9 @@ class RuleEvaluator:
     def _fn_exp(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
         if self._is_error(v):
             return v
         try:
@@ -1173,6 +1217,9 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
         if v < 0:
             return CellError("#NUM!")
         return math.sqrt(v)
@@ -1182,7 +1229,13 @@ class RuleEvaluator:
         base = self._eval(node.args[0], resolver, addr)
         if self._is_error(base):
             return base
+        base = self._coerce_number(base)
+        if self._is_error(base):
+            return base
         exp = self._eval(node.args[1], resolver, addr)
+        if self._is_error(exp):
+            return exp
+        exp = self._coerce_number(exp)
         if self._is_error(exp):
             return exp
         # Match spreadsheet semantics: 0 raised to a negative exponent is a division-by-zero error.
@@ -1201,21 +1254,39 @@ class RuleEvaluator:
     def _fn_sin(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else math.sin(v)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return math.sin(v)
 
     def _fn_cos(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else math.cos(v)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return math.cos(v)
 
     def _fn_tan(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else math.tan(v)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return math.tan(v)
 
     def _fn_asin(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
         if self._is_error(v):
             return v
         try:
@@ -1228,6 +1299,9 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
         try:
             return math.acos(v)
         except ValueError:
@@ -1236,29 +1310,55 @@ class RuleEvaluator:
     def _fn_atan(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else math.atan(v)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return math.atan(v)
 
     def _fn_atan2(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=2)
         y = self._eval(node.args[0], resolver, addr)
         if self._is_error(y):
             return y
+        y = self._coerce_number(y)
+        if self._is_error(y):
+            return y
         x = self._eval(node.args[1], resolver, addr)
-        return x if self._is_error(x) else math.atan2(y, x)
+        if self._is_error(x):
+            return x
+        x = self._coerce_number(x)
+        if self._is_error(x):
+            return x
+        return math.atan2(y, x)
 
     def _fn_radians(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else math.radians(v)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return math.radians(v)
 
     def _fn_degrees(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else math.degrees(v)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return math.degrees(v)
 
     def _fn_sign(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
         if self._is_error(v):
             return v
         return 1.0 if v > 0 else (-1.0 if v < 0 else 0.0)
@@ -1266,14 +1366,25 @@ class RuleEvaluator:
     def _fn_int(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else float(int(v))
+        if self._is_error(v):
+            return v
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        return float(int(v))
 
     def _fn_mod(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=2)
         dividend = self._eval(node.args[0], resolver, addr)
         if self._is_error(dividend):
             return dividend
+        dividend = self._coerce_number(dividend)
+        if self._is_error(dividend):
+            return dividend
         divisor = self._eval(node.args[1], resolver, addr)
+        if self._is_error(divisor):
+            return divisor
+        divisor = self._coerce_number(divisor)
         if self._is_error(divisor):
             return divisor
         if divisor == 0:
@@ -1285,7 +1396,13 @@ class RuleEvaluator:
         dividend = self._eval(node.args[0], resolver, addr)
         if self._is_error(dividend):
             return dividend
+        dividend = self._coerce_number(dividend)
+        if self._is_error(dividend):
+            return dividend
         divisor = self._eval(node.args[1], resolver, addr)
+        if self._is_error(divisor):
+            return divisor
+        divisor = self._coerce_number(divisor)
         if self._is_error(divisor):
             return divisor
         if divisor == 0:
@@ -1297,7 +1414,18 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
-        places = int(self._eval(node.args[1], resolver, addr)) if len(node.args) == 2 else 0
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        places = 0
+        if len(node.args) == 2:
+            p = self._eval(node.args[1], resolver, addr)
+            if self._is_error(p):
+                return p
+            p = self._coerce_number(p)
+            if self._is_error(p):
+                return p
+            places = int(p)
         factor = 10 ** places
         return math.ceil(v * factor) / factor if v >= 0 else math.floor(v * factor) / factor
 
@@ -1306,7 +1434,18 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
-        places = int(self._eval(node.args[1], resolver, addr)) if len(node.args) == 2 else 0
+        v = self._coerce_number(v)
+        if self._is_error(v):
+            return v
+        places = 0
+        if len(node.args) == 2:
+            p = self._eval(node.args[1], resolver, addr)
+            if self._is_error(p):
+                return p
+            p = self._coerce_number(p)
+            if self._is_error(p):
+                return p
+            places = int(p)
         factor = 10 ** places
         return math.floor(v * factor) / factor if v >= 0 else math.ceil(v * factor) / factor
 
@@ -1373,7 +1512,7 @@ class RuleEvaluator:
         self._require_argc(node, exact=2)
         try:
             v = self._eval(node.args[0], resolver, addr)
-        except (ZeroDivisionError, ValueError, OverflowError):
+        except (ZeroDivisionError, ValueError, OverflowError, TypeError):
             return self._eval(node.args[1], resolver, addr)
         if self._is_error(v):
             return self._eval(node.args[1], resolver, addr)
@@ -1538,9 +1677,12 @@ class RuleEvaluator:
             num_chars_raw = self._eval(node.args[1], resolver, addr)
             if self._is_error(num_chars_raw):
                 return num_chars_raw
-            num_chars = int(float(num_chars_raw))
+            nc = self._coerce_number(num_chars_raw)
+            if self._is_error(nc):
+                return nc
+            num_chars = int(nc)
             if num_chars < 0:
-                raise ValueError("LEFT num_chars must be >= 0")
+                return CellError("#VALUE!")
         return self._format_for_string(v)[:num_chars]
 
     def _fn_right(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
@@ -1553,9 +1695,12 @@ class RuleEvaluator:
             num_chars_raw = self._eval(node.args[1], resolver, addr)
             if self._is_error(num_chars_raw):
                 return num_chars_raw
-            num_chars = int(float(num_chars_raw))
+            nc = self._coerce_number(num_chars_raw)
+            if self._is_error(nc):
+                return nc
+            num_chars = int(nc)
             if num_chars < 0:
-                raise ValueError("RIGHT num_chars must be >= 0")
+                return CellError("#VALUE!")
         text = self._format_for_string(v)
         return text[-num_chars:] if num_chars > 0 else ""
 
@@ -1567,9 +1712,12 @@ class RuleEvaluator:
         num_times = self._eval(node.args[1], resolver, addr)
         if self._is_error(num_times):
             return num_times
-        repeat_count = int(float(num_times))
+        nt = self._coerce_number(num_times)
+        if self._is_error(nt):
+            return nt
+        repeat_count = int(nt)
         if repeat_count < 0:
-            raise ValueError("REPT repeat count must be >= 0")
+            return CellError("#VALUE!")
         formatted_text = self._format_for_string(text)
         result = formatted_text * repeat_count
         return result[:1024] if len(result) > 1024 else result
@@ -1587,9 +1735,12 @@ class RuleEvaluator:
         v = self._eval(node.args[0], resolver, addr)
         if self._is_error(v):
             return v
-        code_num = int(float(v))
+        cn = self._coerce_number(v)
+        if self._is_error(cn):
+            return cn
+        code_num = int(cn)
         if code_num < 1 or code_num > 255:
-            raise ValueError("CHAR code must be between 1 and 255")
+            return CellError("#VALUE!")
         return chr(code_num)
 
     def _fn_slice(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
@@ -1685,8 +1836,7 @@ class RuleEvaluator:
         # Get palette
         palette = self._COLORMAP_PALETTES.get(pal_name)
         if palette is None:
-            available = ", ".join(self._COLORMAP_PALETTES.keys())
-            raise ValueError(f"Unknown palette '{pal_name}'. Available: {available}")
+            return CellError("#VALUE!")
 
         # Clamp position to [0, 1]
         pos = max(0.0, min(1.0, pos))
@@ -2161,7 +2311,7 @@ class RuleEvaluator:
         if fn == "COUNTA":
             return float(non_empty_count)
 
-        raise ValueError(f"Unknown function {fn!r}")
+        return CellError("#NAME!")
 
     def _eval_countif(self, args, resolver, addr):
         """COUNTIF(range, criteria) - count cells matching criteria."""

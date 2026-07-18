@@ -16,6 +16,53 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/resolve_python_env.sh"
 resolve_python_env
 
+# ---------------------------------------------------------------------------
+# Extract transport args (--socket, --host, --port) and export as env vars
+# so they propagate to main.py, _wait_for_transport, and sub-processes (TUI).
+# ---------------------------------------------------------------------------
+CARRY_ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --socket)
+            if [ -n "${2:-}" ]; then
+                export OPENM_TRANSPORT_SOCKET="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
+        --host)
+            if [ -n "${2:-}" ]; then
+                export OPENM_TRANSPORT_HOST="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
+        --port)
+            if [ -n "${2:-}" ]; then
+                export OPENM_TRANSPORT_PORT="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
+        *)
+            # Non-transport arg — keep it for mode dispatch below.
+            # Preserve positional args by shifting onto a carry list and
+            # re-setting them after the loop.
+            CARRY_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+# Restore positional parameters (mode + its args) for dispatch below.
+if [ "${#CARRY_ARGS[@]}" -gt 0 ]; then
+    set -- "${CARRY_ARGS[@]}"
+else
+    set --
+fi
+
 cleanup() {
     # Default-mode only: kill background GUI if REPL exited abnormally.
     # Client-only modes (--tui, --repl, etc.) have no background orphans.
@@ -66,6 +113,15 @@ _wait_for_transport() {
 # ---------------------------------------------------------------------------
 # Mode dispatch
 # ---------------------------------------------------------------------------
+
+if [ "$1" = "--remote" ]; then
+    # Launch with remote evaluation backend
+    export OMENGINE_MODE=remote
+    echo "Remote engine enabled (OMENGINE_MODE=remote)"
+    shift
+    # Re-dispatch with remaining args; if none remain, fall through to the
+    # default mode (which prompts for TUI) instead of forcing --gui-only.
+fi
 
 if [ "$1" = "--runtime" ]; then
     # Standalone runtime host (no clients)
@@ -141,6 +197,27 @@ else
 
         echo "Opening TUI in a separate terminal..."
         TUI_CMD="cd \"$SCRIPT_DIR\" && ./start.sh --tui"
+        # Forward transport args so the TUI connects to the right endpoint.
+        if [ -n "${OPENM_TRANSPORT_SOCKET:-}" ]; then
+            TUI_CMD="$TUI_CMD --socket \"$OPENM_TRANSPORT_SOCKET\""
+        fi
+        if [ -n "${OPENM_TRANSPORT_HOST:-}" ]; then
+            TUI_CMD="$TUI_CMD --host \"$OPENM_TRANSPORT_HOST\""
+        fi
+        if [ -n "${OPENM_TRANSPORT_PORT:-}" ]; then
+            TUI_CMD="$TUI_CMD --port \"$OPENM_TRANSPORT_PORT\""
+        fi
+        # Build the macOS variant (no shell quoting needed inside AppleScript).
+        TUI_CMD_MAC="cd \"$SCRIPT_DIR\" && ./start.sh --tui"
+        if [ -n "${OPENM_TRANSPORT_SOCKET:-}" ]; then
+            TUI_CMD_MAC="$TUI_CMD_MAC --socket \"$OPENM_TRANSPORT_SOCKET\""
+        fi
+        if [ -n "${OPENM_TRANSPORT_HOST:-}" ]; then
+            TUI_CMD_MAC="$TUI_CMD_MAC --host \"$OPENM_TRANSPORT_HOST\""
+        fi
+        if [ -n "${OPENM_TRANSPORT_PORT:-}" ]; then
+            TUI_CMD_MAC="$TUI_CMD_MAC --port \"$OPENM_TRANSPORT_PORT\""
+        fi
 
         if command -v osascript >/dev/null 2>&1 && [ "$(uname -s)" = "Darwin" ]; then
             # macOS: open a new Terminal.app window and run the TUI client there.
@@ -149,7 +226,7 @@ else
             osascript <<EOF
 tell application "Terminal"
     activate
-    do script "cd " & quoted form of "$SCRIPT_DIR_AE" & " && ./start.sh --tui"
+    do script "$TUI_CMD_MAC"
 end tell
 EOF
         elif command -v gnome-terminal >/dev/null 2>&1; then
@@ -166,7 +243,8 @@ EOF
             xterm -e bash -c "$TUI_CMD" &
         else
             echo "No supported terminal emulator found."
-            echo "Please run './start.sh --tui' manually in another terminal."
+            echo "Please run this manually in another terminal:"
+            echo "  $TUI_CMD"
         fi
     else
         echo "TUI not opened. Run './start.sh --tui' later if you want a command line."

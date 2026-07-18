@@ -371,19 +371,13 @@ def cmd_clear_cache(ctx, scope: str = "all") -> dict:
 
     cleared = False
     if scope == "all":
-        if hasattr(engine._core, '_clear_caches'):
-            engine._core._clear_caches()
-            ctx.status("All caches cleared")
-            cleared = True
-        elif hasattr(engine._core, '_clear_cell_cache'):
-            engine._core._clear_cell_cache()
-            ctx.status("Cell cache cleared")
-            cleared = True
+        engine.clear_caches("all")
+        ctx.status("All caches cleared")
+        cleared = True
     elif scope == "cell":
-        if hasattr(engine._core, '_clear_cell_cache'):
-            engine._core._clear_cell_cache()
-            ctx.status("Cell cache cleared")
-            cleared = True
+        engine.clear_caches("cell")
+        ctx.status("Cell cache cleared")
+        cleared = True
     else:
         ctx.status(f"Unknown cache scope: {scope}")
         return {"cleared": False, "scope": scope}
@@ -600,7 +594,7 @@ def cmd_set_engine(ctx, engine_type: str = "python", dependency_tracking: bool =
 
     from lib_runtime.session_ops import switch_engine
 
-    new_engine = switch_engine(ws, engine_type, context=ctx)
+    new_engine = switch_engine(ws, engine_type, context=ctx, force_new=True)
     if hasattr(new_engine, 'enable_dependency_tracking'):
         new_engine.enable_dependency_tracking(dependency_tracking)
 

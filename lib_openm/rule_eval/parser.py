@@ -192,6 +192,9 @@ class _Parser:
                 return _AstNum(0.0)
             if name_upper in _FUNCTIONS or name_upper in _UdfFunctions:
                 return self._call(name_upper)
+            # Unknown name followed by ( — treat as function call for #NAME! at eval time
+            if self._peek().kind == _TT_LPAREN:
+                return self._call(name_upper)
             self._eat()
             return _AstCtxRef(t.value)
 

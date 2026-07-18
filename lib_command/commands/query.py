@@ -175,7 +175,7 @@ def _cmd_query(
         return {
             "type": "dimension_effective_order",
             "dim_id": dim_id,
-            "item_ids": engine._core._dimension_effective_order(dim_id),
+            "item_ids": engine.dimension_effective_order(dim_id),
         }
 
     if type == "dimension_effective_order_window":
@@ -187,7 +187,7 @@ def _cmd_query(
         return {
             "type": "dimension_effective_order_window",
             "dim_id": dim_id,
-            "item_ids": engine._core._dimension_effective_order_window(dim_id, offset=offset, limit=limit),
+            "item_ids": engine.dimension_effective_order_window(dim_id, offset=offset, limit=limit),
         }
 
     # ---- Phase D cell query handlers ----
@@ -326,6 +326,9 @@ def _cmd_query(
     if type == "diagnostics_dependency_tracking_state":
         return {"dependency_tracking_enabled": bool(getattr(engine, "_dep_tracking_enabled", False))}
 
+    if type == "diagnostics_engine_backend":
+        return engine.engine_info()
+
     if type == "diagnostics_dependency_metrics":
         return engine.dependency_metrics()
 
@@ -334,10 +337,10 @@ def _cmd_query(
         return engine.rule_eval_profile_snapshot(top_n=top_n)
 
     if type == "diagnostics_multithread_config":
-        return engine._core._multithread_recompute_config()
+        return engine.multithread_recompute_config()
 
     if type == "diagnostics_dirty_count":
-        dirty_keys = engine._dep_graph.dirty_keys()
+        dirty_keys = engine.dirty_keys()
         result: dict = {"dirty_count": len(dirty_keys)}
         if kwargs.get("include_keys"):
             result["dirty_keys"] = dirty_keys
@@ -573,7 +576,7 @@ def _cmd_query(
         "outline_tree, page_selection, cell_rule, rule_detail, cube_rule_counts, "
         "rule_target_resolve, cell_value_by_ref, "
         "diagnostics_calculation_flow, diagnostics_circular_references, diagnostics_dependency_tracking_state, "
-        "diagnostics_dependency_metrics, diagnostics_rule_eval_profile, diagnostics_multithread_config, diagnostics_dirty_count, "
+        "diagnostics_engine_backend, diagnostics_dependency_metrics, diagnostics_rule_eval_profile, diagnostics_multithread_config, diagnostics_dirty_count, "
         "grid_viewport_snapshot, cell_channel_values, selection_stats, workspace_rules, "
         "udf_list, udf_detail, profiler_list"
     )
@@ -659,7 +662,7 @@ def cmd_cell_detail(
     cell = engine.get_cell_value(view_id, cell_ref)
     explain = cell.explain
     # print(f"[CELL-DETAIL-STEP] addr_for_view_ids view={view_id[:8]}", flush=True)
-    addr = engine._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key)
+    addr = engine.addr_for_view_ids(view_id, row_key=row_key, col_key=col_key)
     value = cell.value
     # print(f"[CELL-DETAIL-STEP] classify value={value!r} source={getattr(explain, 'source', None)!r}", flush=True)
     kind, display_value = _classify_cell_value(value, explain)
@@ -709,7 +712,7 @@ def cmd_cell_range(
             cell_ref = {"kind": "ids", "row_key": rk, "col_key": ck}
             cell = engine.get_cell_value(view_id, cell_ref)
             explain = cell.explain
-            addr = engine._addr_for_view_ids(view_id, row_key=rk, col_key=ck)
+            addr = engine.addr_for_view_ids(view_id, row_key=rk, col_key=ck)
             value = cell.value
             kind, display_value = _classify_cell_value(value, explain)
 
@@ -751,7 +754,7 @@ def cmd_addr_resolve(
     col_key: tuple[str, ...],
 ) -> dict:
     """Resolve view keys to full address. Returns CellAddressDTO as dict."""
-    addr = engine._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key)
+    addr = engine.addr_for_view_ids(view_id, row_key=row_key, col_key=col_key)
 
     return {
         "view_id": view_id,
@@ -992,7 +995,7 @@ def cmd_page_selection(engine, view_id: str, dim_id: str) -> dict:
 
     Returns {"type": "page_selection", "view_id": str, "dim_id": str, "item_id": str | None}.
     """
-    item_id = engine._get_page_item_id(view_id, dim_id)
+    item_id = engine.get_page_item_id(view_id, dim_id)
     return {"type": "page_selection", "view_id": view_id, "dim_id": dim_id, "item_id": item_id}
 
 
@@ -1321,7 +1324,7 @@ def _compute_viewport_snapshot(
     serializes those queries against engine mutations (e.g. rename) on the
     main thread and prevents concurrent reads from seeing torn workspace state.
     """
-    with engine._engine_lock:
+    with engine.engine_lock:
         return _compute_viewport_snapshot_locked(
             engine,
             view,
@@ -1396,10 +1399,10 @@ def _compute_viewport_snapshot_locked(
                 if meta.source == "rule" and (meta.is_dirty or not meta.is_tracked):
                     needs_eval.add(ch_addr)
 
-        tracking_enabled = engine._is_tracking_enabled()
+        tracking_enabled = engine.is_dependency_tracking_enabled()
         for addr in needs_eval:
             try:
-                engine._get_cell_by_addr(cube, addr)
+                engine.get_cell_by_addr(cube, addr)
             except SnapshotInvariantError:
                 raise
             except Exception:
@@ -1407,7 +1410,7 @@ def _compute_viewport_snapshot_locked(
                 # failing the whole viewport.
                 pass
     else:
-        tracking_enabled = engine._is_tracking_enabled()
+        tracking_enabled = engine.is_dependency_tracking_enabled()
 
     with engine.dependency_tracking_disabled():
         # Fetch values and determine sources from read-only APIs only.

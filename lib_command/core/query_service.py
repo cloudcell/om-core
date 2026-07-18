@@ -76,6 +76,7 @@ QUERY_TYPE_TO_TOPIC: dict[str, str] = {
     "diagnostics_dirty_count": "query.diagnostics.dirty_count",
     "diagnostics_multithread_config": "query.diagnostics.multithread_config",
     "diagnostics_rule_eval_profile": "query.diagnostics.rule_eval_profile",
+    "diagnostics_engine_backend": "query.diagnostics.engine_backend",
 }
 
 # Reverse lookup used by the service when a topic arrives with a payload.

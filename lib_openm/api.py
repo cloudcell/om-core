@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 from typing import Any, Callable
 
 from lib_contracts.types import RuleValidationError
@@ -52,6 +53,38 @@ class Engine:
 
     def read_engine_diagnostics(self):
         return self._core._state_machine.get_diagnostics()
+
+    def engine_info(self) -> dict[str, Any]:
+        """Return engine backend type, package version, and connection state."""
+        backend = "python"
+        connected = True
+        server_version: str | None = None
+        version = self._engine_version()
+        result: dict[str, Any] = {
+            "type": backend,
+            "version": version,
+            "connected": connected,
+        }
+        if server_version is not None:
+            result["server_version"] = server_version
+        return result
+
+    def _engine_version(self) -> str:
+        """Resolve the om-core package version from metadata or pyproject.toml."""
+        try:
+            return importlib.metadata.version("om-core")
+        except importlib.metadata.PackageNotFoundError:
+            pass
+        try:
+            from pathlib import Path
+            import tomllib
+
+            pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+            with pyproject.open("rb") as f:
+                data = tomllib.load(f)
+            return str(data.get("project", {}).get("version", "unknown"))
+        except Exception:
+            return "unknown"
 
     def execute_serialized_command(
         self,
@@ -420,4 +453,50 @@ class Engine:
 
     def view_row_keys(self, *args, **kwargs):
         return self._core.view_row_keys(*args, **kwargs)
+
+    # --- Phase 2.5: public API methods replacing internal _core._xxx access ---
+
+    def clear_caches(self, scope: str = "all") -> None:
+        if scope == "all":
+            self._core._clear_caches()
+        elif scope == "cell":
+            self._core._clear_cell_cache()
+
+    def dimension_effective_order(self, dim_id: str) -> list[str]:
+        return self._core._dimension_effective_order(dim_id)
+
+    def dimension_effective_order_window(
+        self, dim_id: str, *, offset: int = 0, limit: int | None = None
+    ) -> list[str]:
+        return self._core._dimension_effective_order_window(
+            dim_id, offset=offset, limit=limit
+        )
+
+    def multithread_recompute_config(self) -> dict[str, int]:
+        return self._core._multithread_recompute_config()
+
+    def dirty_keys(self) -> list[str]:
+        return self._core._dep_graph.dirty_keys()
+
+    def is_dependency_tracking_enabled(self) -> bool:
+        return self._core._is_tracking_enabled()
+
+    def addr_for_view_ids(
+        self, view_id: str, *, row_key=None, col_key=None
+    ) -> tuple[str, ...]:
+        return self._core._addr_for_view_ids(view_id, row_key=row_key, col_key=col_key)
+
+    def get_page_item_id(self, view_id: str, dim_id: str) -> str | None:
+        return self._core._get_page_item_id(view_id, dim_id)
+
+    def ensure_group_in_graph(
+        self, dim_id: str, group_node, parent_group_id: str | None = None
+    ) -> str:
+        return self._core._ensure_group_in_graph(
+            dim_id, group_node, parent_group_id=parent_group_id
+        )
+
+    @property
+    def engine_lock(self):
+        return self._core._engine_lock
 
