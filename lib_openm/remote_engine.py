@@ -1310,7 +1310,7 @@ class RemoteEngine:
                         if len(parts) != 2:
                             continue
                         cube_id, addr_key = parts
-                        cube = self._workspace_cache.cubes.get(cube_id) if self._workspace_cache else None
+                        cube = self.workspace.cubes.get(cube_id)
                         if cube is None:
                             continue
                         addr = tuple(addr_key.split("|"))

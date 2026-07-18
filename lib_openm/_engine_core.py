@@ -5214,8 +5214,8 @@ class _EngineCore:
                 )
             except OverflowError:
                 return CellValue(
-                    value=CellError("#NUM!"),
-                    explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#NUM!"),
+                    value=CellError("#RANGE!"),
+                    explain=Explain(source="error", cube_id=cube.id, addr=addr, rule_body=expr, error="#RANGE!"),
                 )
             except TypeError:
                 return CellValue(

@@ -28,7 +28,8 @@ class CellError:
         "#VALUE!",       # family 3: type / value-kind
         "#N/A",          # family 4: lookup / availability
         "#DIV/0!",       # family 5: arithmetic / numeric
-        "#NUM!",         # family 5: arithmetic / numeric
+        "#NUM!",         # family 5: arithmetic / numeric — domain errors
+        "#RANGE!",       # family 5: arithmetic / numeric — overflow / out-of-range
         "#CIRC!",        # family 6: circular dependency
         "#EXPRESSION!",  # family 7: expression fallback
     })

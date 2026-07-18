@@ -67,7 +67,7 @@ class RuleEvaluator:
             if math.isnan(value):
                 return CellError("#NUM!")
             if math.isinf(value):
-                return CellError("#NUM!")
+                return CellError("#RANGE!")
         return value
 
     @staticmethod
@@ -359,7 +359,7 @@ class RuleEvaluator:
                 except ValueError:
                     return CellError("#NUM!")
                 except OverflowError:
-                    return CellError("#NUM!")
+                    return CellError("#RANGE!")
                 # ZeroDivisionError is intentionally propagated so the engine can map it to #DIV/0!
                 if isinstance(result, complex):
                     return CellError("#NUM!")
@@ -1210,7 +1210,7 @@ class RuleEvaluator:
         try:
             return math.exp(v)
         except OverflowError:
-            return CellError("#NUM!")
+            return CellError("#RANGE!")
 
     def _fn_sqrt(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
@@ -1243,8 +1243,10 @@ class RuleEvaluator:
             return CellError("#DIV/0!")
         try:
             result = math.pow(base, exp)
-        except (ValueError, OverflowError):
+        except ValueError:
             return CellError("#NUM!")
+        except OverflowError:
+            return CellError("#RANGE!")
         except ZeroDivisionError:
             return CellError("#DIV/0!")
         if isinstance(result, complex):
