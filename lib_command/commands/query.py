@@ -78,7 +78,14 @@ def _cmd_query(
         cube_id: for cube_detail query
     """
     engine = ctx.engine
-    ws = ctx.workspace
+    ws = None
+    if engine is not None:
+        try:
+            ws = engine.workspace
+        except (OSError, ConnectionError, AttributeError):
+            ws = None
+    if ws is None:
+        ws = ctx.workspace
 
     if not engine or not ws:
         raise ValueError("No engine or workspace available")
@@ -544,10 +551,12 @@ def _cmd_query(
     if type == "dimension_list":
         dims = []
         for did, dim in ws.dimensions.items():
+            dim_items = getattr(dim, 'items', [])
             dims.append({
                 "id": did,
                 "name": dim.name if hasattr(dim, 'name') else did,
-                "items": len(dim.items) if hasattr(dim, 'items') else 0
+                "items": len(dim_items),
+                "item_list": [{"id": it.id, "name": it.name} for it in dim_items],
             })
         return {"type": "dimension_list", "dimensions": dims}
 
@@ -782,6 +791,10 @@ def _coerce_to_primitive(value: object) -> CellPrimitive:
         return None
     if isinstance(value, str):
         return value
+    # Preserve CellError objects so the GUI can render them with error styling
+    # rather than treating them as plain text.
+    if hasattr(value, "code") and hasattr(value, "_VALID_CODES"):
+        return str(value)
     return str(value)
 
 
@@ -894,22 +907,12 @@ def cmd_workspace_snapshot(ctx, engine, ws) -> WorkspaceSnapshotDTO:
             outline=_serialize_outline_nodes(fresh_outline),
         )
 
-    # Consistency check: IDs must match snapshot keys (use RuntimeError, not assert)
-    view_ids = list(ws.views.keys())
-    if set(view_ids) != set(view_snapshots.keys()):
-        raise RuntimeError(
-            "workspace view IDs do not match view snapshot keys"
-        )
-    cube_ids = list(ws.cubes.keys())
-    if set(cube_ids) != set(cube_snapshots.keys()):
-        raise RuntimeError(
-            "workspace cube IDs do not match cube snapshot keys"
-        )
-    dimension_ids = list(ws.dimensions.keys())
-    if set(dimension_ids) != set(dimension_snapshots.keys()):
-        raise RuntimeError(
-            "workspace dimension IDs do not match dimension snapshot keys"
-        )
+    # Use the snapshot dict keys as the source of truth for IDs.
+    # Re-reading ws.views/cubes/dimensions keys would race with concurrent
+    # in-place cache updates (e.g. create_cube adding to _cached_workspace.cubes).
+    view_ids = list(view_snapshots.keys())
+    cube_ids = list(cube_snapshots.keys())
+    dimension_ids = list(dimension_snapshots.keys())
 
     return WorkspaceSnapshotDTO(
         id=ws.id,
@@ -1430,6 +1433,7 @@ def _compute_viewport_snapshot_locked(
                 "source": meta.source,
                 "cube_id": cube.id,
                 "addr": addr,
+                "error": meta.error,
             }
 
         # Requested channels

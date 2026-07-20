@@ -175,7 +175,11 @@ class PromptToolkitTUI:
             multiline=False,
             accept_handler=self._on_accept,
             completer=_CmdCompleter(repl),
-            complete_while_typing=True,
+            # Must match the REPL's PromptSession default: completions only on
+            # Tab, not on every keystroke.  Setting True floods the remote
+            # engine with completion queries (dimension_list, cube_list, etc.)
+            # on each keypress, overwhelming the single-threaded server.
+            complete_while_typing=False,
             history=history,
         )
         repl._prompt_history = history

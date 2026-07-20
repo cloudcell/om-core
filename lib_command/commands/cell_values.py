@@ -437,3 +437,24 @@ def cmd_delete_dimension(
         causation_id=getattr(ctx, "command_message_id", None),
     )
     return {"affected": 1 if removed else 0, "property": "dimension_deleted", "dim_id": dim_id}
+
+
+def cmd_set_cell_hardvalue_by_addr(
+    ctx: Any,
+    cube_id: str,
+    addr: list,
+    value: Any,
+) -> dict:
+    """Set a cell hardvalue using a full cube address tuple.
+
+    Canonical command for address-based hardvalue assignment.
+    Delegates to ``engine.set_cell_hardvalue_by_addr``.
+    """
+    if not cube_id:
+        raise ValueError("cube_id is required")
+    if addr is None:
+        raise ValueError("addr is required")
+
+    coerced = coerce_user_value(value)
+    ctx.engine.set_cell_hardvalue_by_addr(cube_id, tuple(addr), coerced)
+    return {"affected": 1, "property": "value", "cube_id": cube_id}

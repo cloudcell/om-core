@@ -1105,6 +1105,8 @@ class ViewWorkspaceController(QtCore.QObject):
     def _on_rule_bar_enter(self) -> None:
         """Handle rule input bar Enter key - process rules, cell rules, or values."""
         text = self._pane.rule_bar.text().strip()
+        if not text:
+            return
         # Allow user to paste with surrounding quotes
         if text.startswith('"') and text.endswith('"') and len(text) >= 2:
             text = text[1:-1].strip()

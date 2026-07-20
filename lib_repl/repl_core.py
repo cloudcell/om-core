@@ -533,6 +533,9 @@ class OpenMREPLCore(cmd.Cmd):
                 ):
                     print("\n[GUI closed - shutting down REPL]")
                     break
+                if not getattr(self, 'gui_exit_event', None):
+                    print("\n^C")
+                    break
                 print("\nUse 'quit' or 'exit' to leave")
                 self.run()
                 return
@@ -566,6 +569,8 @@ class OpenMREPLCore(cmd.Cmd):
         except KeyboardInterrupt:
             if hasattr(self, 'gui_exit_event') and self.gui_exit_event and self.gui_exit_event.is_set():
                 print("\n[GUI closed - shutting down REPL]")
+                return
+            if not getattr(self, 'gui_exit_event', None):
                 return
             print("\nUse 'quit' or 'exit' to leave")
             self.run()

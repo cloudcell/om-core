@@ -1749,7 +1749,7 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
                         cell = snapshot_cells.get(cell_key)
                         if cell is not None:
-                            cell_value = cell.get("value")
+                            cell_value = cell.get("error") or cell.get("value")
                             p.setPen(QtGui.QColor("#202020"))
                             default_font = QtGui.QFont("sans-serif", 9)
                             p.setFont(default_font)
@@ -1822,6 +1822,10 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                     p.setPen(text_pen)
 
                     value_type = get_value_type(cell_value)
+                    cell_error = cell.get("error")
+                    if cell_error:
+                        value_type = "error"
+                        cell_value = cell_error
                     try:
                         if value_type == "null":
                             v = self._format_null(fmt.format_null)
@@ -5033,7 +5037,12 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
                                     fmt = CellFormat()
                                 from lib_contracts.types import get_value_type
                                 cell_value = cell.get("value")
-                                value_type = get_value_type(cell_value)
+                                cell_error = cell.get("error")
+                                if cell_error:
+                                    value_type = "error"
+                                    cell_value = cell_error
+                                else:
+                                    value_type = get_value_type(cell_value)
                                 try:
                                     if value_type == "null":
                                         v = self._format_null(fmt.format_null)
@@ -5142,7 +5151,12 @@ class MatrixGrid(QtWidgets.QAbstractScrollArea):
 
                     # Determine value type and apply appropriate format
                     from lib_contracts.types import get_value_type
-                    value_type = get_value_type(cell_value)
+                    cell_error = cell.get("error")
+                    if cell_error:
+                        value_type = "error"
+                        cell_value = cell_error
+                    else:
+                        value_type = get_value_type(cell_value)
 
                     try:
                         if value_type == "null":

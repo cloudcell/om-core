@@ -11,6 +11,7 @@ server process — that is the factory's responsibility (via Launcher).
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import contextmanager
 from typing import Any, Callable
 
@@ -170,6 +171,7 @@ class RemoteEngine:
         self._batch_invalidation_pending = False
         self._cached_workspace: Workspace | None = None
         self._local_ws: Workspace | None = workspace
+        self._ws_lock = threading.Lock()
 
         # Load initial workspace into the server.
         self._suppress_events = True
@@ -215,7 +217,13 @@ class RemoteEngine:
 
     @property
     def workspace(self) -> Workspace:
-        if self._cached_workspace is None:
+        if self._cached_workspace is not None:
+            return self._cached_workspace
+        with self._ws_lock:
+            # Double-check after acquiring lock: another thread may have
+            # already fetched the workspace while we were waiting.
+            if self._cached_workspace is not None:
+                return self._cached_workspace
             result = self._conn.call(RpcMethod.GET_WORKSPACE)
             ws_from_server = _dto_to_workspace(result)
             # The server may not return views; merge from local copy if missing.
@@ -229,7 +237,7 @@ class RemoteEngine:
             if self._local_ws is not None:
                 self._restore_dimension_item_order(ws_from_server, self._local_ws)
             self._cached_workspace = ws_from_server
-        return self._cached_workspace
+            return self._cached_workspace
 
     def _restore_dimension_item_order(self, server_ws: Workspace, local_ws: Workspace) -> None:
         """Reorder items in server_ws dimensions to match local_ws order.
@@ -447,10 +455,11 @@ class RemoteEngine:
         result = self._conn.call(
             RpcMethod.CREATE_DIMENSION, name=name, dim_type=dim_type
         )
-        publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
         dim = _dto_to_dimension(d=result["data"])
         self._sync_dim_to_local_ws(dim)
+        if self._cached_workspace is not None:
+            self._cached_workspace.dimensions[dim.id] = dim
+        publish_events(self, result.get("events", []))
         return dim
 
     def create_dimension_item(
@@ -462,16 +471,16 @@ class RemoteEngine:
             name=name,
             position=position,
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
         return result["data"]
 
     def rename_dimension(self, dim_id: str, new_name: str) -> None:
         result = self._conn.call(
             RpcMethod.RENAME_DIMENSION, dim_id=dim_id, new_name=new_name
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def rename_dimension_item(
         self, dim_id: str, item_id: str, new_name: str
@@ -482,27 +491,30 @@ class RemoteEngine:
             item_id=item_id,
             new_name=new_name,
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def delete_dimension(self, dim_id: str) -> None:
         result = self._conn.call(RpcMethod.DELETE_DIMENSION, dim_id=dim_id)
+        if self._local_ws is not None and dim_id in self._local_ws.dimensions:
+            del self._local_ws.dimensions[dim_id]
+        if self._cached_workspace is not None and dim_id in self._cached_workspace.dimensions:
+            del self._cached_workspace.dimensions[dim_id]
         publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     def delete_dimension_items(self, dim_id: str, item_ids: list[str]) -> None:
         result = self._conn.call(
             RpcMethod.DELETE_DIMENSION_ITEMS, dim_id=dim_id, item_ids=item_ids
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def set_dimension_item_order(self, dim_id: str, item_ids: list[str]) -> None:
         result = self._conn.call(
             RpcMethod.SET_DIMENSION_ITEM_ORDER, dim_id=dim_id, item_ids=item_ids
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def require_dimension_by_id(self, dim_id: str) -> Any:
         ws = self.workspace
@@ -530,37 +542,41 @@ class RemoteEngine:
         result = self._conn.call(
             RpcMethod.CREATE_CUBE, name=name, dimension_ids=dim_ids
         )
-        publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
         cube = _dto_to_cube(d=result["data"])
         self._sync_cube_to_local_ws(cube)
+        if self._cached_workspace is not None:
+            self._cached_workspace.cubes[cube.id] = cube
+        publish_events(self, result.get("events", []))
         return cube
 
     def rename_cube(self, cube_id: str, new_name: str) -> None:
         result = self._conn.call(
             RpcMethod.RENAME_CUBE, cube_id=cube_id, new_name=new_name
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def delete_cube(self, cube_id: str) -> None:
         result = self._conn.call(RpcMethod.DELETE_CUBE, cube_id=cube_id)
+        if self._local_ws is not None and cube_id in self._local_ws.cubes:
+            del self._local_ws.cubes[cube_id]
+        if self._cached_workspace is not None and cube_id in self._cached_workspace.cubes:
+            del self._cached_workspace.cubes[cube_id]
         publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     def attach_dimension_to_cube(self, cube_id: str, dim_id: str) -> None:
         result = self._conn.call(
             RpcMethod.ATTACH_DIMENSION, cube_id=cube_id, dim_id=dim_id
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def detach_dimension_from_cube(self, cube_id: str, dim_id: str) -> None:
         result = self._conn.call(
             RpcMethod.DETACH_DIMENSION, cube_id=cube_id, dim_id=dim_id
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def find_cube_by_id(self, cube_id: str) -> Any:
         ws = self.workspace
@@ -599,15 +615,15 @@ class RemoteEngine:
             expression=expression,
             is_anchored=is_anchored,
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def update_rule(self, rule_id: str, expression: str) -> None:
         result = self._conn.call(
             RpcMethod.UPDATE_RULE, rule_id=rule_id, expression=expression
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def update_rule_full(
         self,
@@ -623,25 +639,25 @@ class RemoteEngine:
             targets=[list(t) for t in targets],
             is_anchored=is_anchored,
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def delete_rule(self, rule_id: str) -> bool:
         result = self._conn.call(RpcMethod.DELETE_RULE, rule_id=rule_id)
-        publish_events(self, result.get("events", []))
         self._delete_rule_from_local_ws(rule_id)
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
         return True
 
     def set_rule_order(self, rule_ids: list[str]) -> None:
         result = self._conn.call(RpcMethod.SET_RULE_ORDER, rule_ids=rule_ids)
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def apply_rule_batch(self, rules: list[dict]) -> Any:
         result = self._conn.call(RpcMethod.APPLY_RULE_BATCH, rules=rules)
-        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
         return result
 
     def find_rule(self, cube_id: str, addr: tuple, dim_ids: list[str]) -> Any:
@@ -662,16 +678,16 @@ class RemoteEngine:
         result = self._conn.call(
             RpcMethod.DELETE_RULE_ANCHORED, cube_id=cube_id, addr=list(addr)
         )
-        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
 
     def set_rule_anchored(self, view_id: str, cell_ref: dict, expression: str) -> None:
         cube_id, addr = self._cell_ref_to_cube_addr(view_id, cell_ref)
         result = self._conn.call(
             RpcMethod.SET_RULE_ANCHORED, cube_id=cube_id, addr=list(addr), expression=expression
         )
-        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
 
     def set_rule_anchored_by_addr(
         self, cube_id: str, addr: tuple, expression: str
@@ -679,8 +695,8 @@ class RemoteEngine:
         result = self._conn.call(
             RpcMethod.SET_RULE_ANCHORED_BY_ADDR, cube_id=cube_id, addr=list(addr), expression=expression
         )
-        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
 
     def update_cell_rule(self, view_id: str, cell_ref: dict, expression: str) -> None:
         cube_id, addr = self._cell_ref_to_cube_addr(view_id, cell_ref)
@@ -691,8 +707,8 @@ class RemoteEngine:
         result = self._conn.call(
             RpcMethod.UPDATE_CELL_RULE, rule_id=rule["id"], expression=expression
         )
-        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", [])) if isinstance(result, dict) else None
 
     def rule_counts_for_cube(self, cube_id: str) -> dict:
         return self._conn.call(RpcMethod.RULE_COUNTS_FOR_CUBE, cube_id=cube_id)
@@ -852,8 +868,8 @@ class RemoteEngine:
                 RpcMethod.BATCH_SET_CELL_DATA,
                 cube_id=cube_id, values=values_map, rules=rules_map,
             )
-            publish_events(self, result.get("events", []))
             self._invalidate_workspace_cache()
+            publish_events(self, result.get("events", []))
         elif view_id is not None and cells is not None:
             # Legacy view_id/cells API — convert to addr-based calls
             view = self.require_view_by_id(view_id)
@@ -866,16 +882,16 @@ class RemoteEngine:
                 RpcMethod.BATCH_SET_CELL_DATA,
                 cube_id=cube_id, values=values_map, rules={},
             )
-            publish_events(self, result.get("events", []))
             self._invalidate_workspace_cache()
+            publish_events(self, result.get("events", []))
 
     def set_range(self, view_id: str, top: int, left: int, values: list[list[Any]]) -> None:
         result = self._conn.call(
             RpcMethod.SET_RANGE,
             view_id=view_id, top=top, left=left, values=values,
         )
-        publish_events(self, result.get("events", []))
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
 
     def get_range(self, view_id: str, top: int, left: int, bottom: int, right: int) -> list[list[Any]]:
         result = self._conn.call(
@@ -963,33 +979,38 @@ class RemoteEngine:
     ) -> Any:
         row_dim_ids = [row_dim_id] if row_dim_id else []
         col_dim_ids = [col_dim_id] if col_dim_id else []
+        rpc_kwargs: dict[str, Any] = {
+            "name": name,
+            "cube_id": cube_id,
+            "row_dim_ids": row_dim_ids,
+            "col_dim_ids": col_dim_ids,
+        }
+        if page_dim_ids:
+            rpc_kwargs["page_dim_ids"] = page_dim_ids
         result = self._conn.call(
             RpcMethod.CREATE_VIEW,
-            name=name,
-            cube_id=cube_id,
-            row_dim_ids=row_dim_ids,
-            col_dim_ids=col_dim_ids,
+            **rpc_kwargs,
         )
-        publish_events(self, result.get("events", []))
         view = _dto_to_view(d=result["data"])
         if self._local_ws is not None:
             self._local_ws.views[view.id] = view
             if view.id not in self._local_ws.views_order:
                 self._local_ws.views_order.append(view.id)
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
         return view
 
     def create_default_view_for_cube(self, cube_id: str) -> Any:
         result = self._conn.call(
             RpcMethod.CREATE_DEFAULT_VIEW, cube_id=cube_id
         )
-        publish_events(self, result.get("events", []))
         view = _dto_to_view(d=result["data"])
         if self._local_ws is not None:
             self._local_ws.views[view.id] = view
             if view.id not in self._local_ws.views_order:
                 self._local_ws.views_order.append(view.id)
         self._invalidate_workspace_cache()
+        publish_events(self, result.get("events", []))
         return view.id
 
     def set_view_axes(self, view_id: str, row_dimension_id: str, col_dimension_id: str) -> None:
@@ -1126,8 +1147,8 @@ class RemoteEngine:
             kw["parent_group_id"] = parent_group_id
         result = self._conn.call(RpcMethod.CREATE_GROUP, **kw)
         if isinstance(result, dict):
-            publish_events(self, result.get("events", []))
             self._invalidate_workspace_cache()
+            publish_events(self, result.get("events", []))
             data = result.get("data", result)
             if isinstance(data, dict):
                 return str(data.get("group_node_id", data.get("group_id", "")))
@@ -1142,8 +1163,8 @@ class RemoteEngine:
             name=name,
         )
         if isinstance(result, dict):
-            publish_events(self, result.get("events", []))
             self._invalidate_workspace_cache()
+            publish_events(self, result.get("events", []))
             return result.get("data", result)
         return result
 
@@ -1154,9 +1175,9 @@ class RemoteEngine:
             item_ids=item_ids,
             group_node_id=group_node_id,
         )
+        self._invalidate_workspace_cache()
         if isinstance(result, dict):
             publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     def ungroup_items(self, dim_id: str, item_ids: list[str]) -> None:
         result = self._conn.call(
@@ -1164,9 +1185,9 @@ class RemoteEngine:
             dim_id=dim_id,
             item_ids=item_ids,
         )
+        self._invalidate_workspace_cache()
         if isinstance(result, dict):
             publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     def rename_group_node(self, dim_id: str, node_id: str, new_label: str) -> None:
         result = self._conn.call(
@@ -1175,9 +1196,9 @@ class RemoteEngine:
             node_id=node_id,
             new_label=new_label,
         )
+        self._invalidate_workspace_cache()
         if isinstance(result, dict):
             publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     def delete_group_node(
         self,
@@ -1191,9 +1212,9 @@ class RemoteEngine:
             group_node_id=group_node_id,
             promote_children=promote_children,
         )
+        self._invalidate_workspace_cache()
         if isinstance(result, dict):
             publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     def move_nodes(
         self,
@@ -1217,9 +1238,9 @@ class RemoteEngine:
         if anchor_node_id is not None:
             kw["anchor_node_id"] = anchor_node_id
         result = self._conn.call(RpcMethod.MOVE_NODES, **kw)
+        self._invalidate_workspace_cache()
         if isinstance(result, dict):
             publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     def place_item_nodes(
         self,
@@ -1239,11 +1260,10 @@ class RemoteEngine:
         if anchor_node_id is not None:
             kw["anchor_node_id"] = anchor_node_id
         result = self._conn.call(RpcMethod.PLACE_ITEM_NODES, **kw)
+        self._invalidate_workspace_cache()
         if isinstance(result, dict):
             publish_events(self, result.get("events", []))
-            self._invalidate_workspace_cache()
             return result.get("data", result.get("node_ids", []))
-        self._invalidate_workspace_cache()
         return result if isinstance(result, list) else []
 
     def reorder_nodes(
@@ -1264,9 +1284,9 @@ class RemoteEngine:
         if anchor_node_id is not None:
             kw["anchor_node_id"] = anchor_node_id
         result = self._conn.call(RpcMethod.REORDER_NODES, **kw)
+        self._invalidate_workspace_cache()
         if isinstance(result, dict):
             publish_events(self, result.get("events", []))
-        self._invalidate_workspace_cache()
 
     # ------------------------------------------------------------------
     # Recompute methods

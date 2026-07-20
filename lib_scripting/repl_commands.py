@@ -589,6 +589,203 @@ class REPLCommandMixin:
         print("  Set a cell value by dimension item keys.")
         print("  Example: set_cell_by_keys view_id=view_1 row_key=(item1,) col_key=(item2,) value=42")
 
+    def do_hval(self: OpenMREPLCore, arg: str):
+        """
+        Set a cell hardvalue (syntactic sugar for set_cell_hardvalue).
+        Accepts row/col indices, row_key/col_key tuples, or $-prefixed full addresses.
+        Usage: hval view_id=<id> row=<n> col=<n> value=<value>
+               hval view_id=<id> row_key=(<id>,) col_key=(<id>,) value=<value>
+               hval $Cube::Dim.Item:Dim.Item value=<value>
+               hval Cube::Dim.Item:Dim.Item = value
+        """
+        stripped = arg.strip()
+        if stripped.startswith('$'):
+            self._hval_by_address(stripped)
+            return
+        first_token = stripped.split()[0] if stripped else ''
+        if '::' in first_token:
+            self._hval_by_address('$' + stripped)
+            return
+        self.do_set_cell(arg)
+
+    def _hval_by_address(self: OpenMREPLCore, arg: str):
+        """Handle hval with $-prefixed semantic address.
+
+        Syntax: hval $Cube::Dim.Item:Dim.Item value=<value>
+                hval $Cube::Dim.Item:Dim.Item = value
+        The address must resolve to a unique cell (no wildcards).
+        """
+        tokens = shlex.split(arg)
+        if not tokens or not tokens[0].startswith('$'):
+            print("Error: expected $-prefixed address")
+            return
+
+        address = tokens[0][1:]  # strip $
+        rest = tokens[1:]
+
+        value = None
+        if rest and rest[0] == '=' and len(rest) >= 2:
+            value = ' '.join(rest[1:])
+        else:
+            params = _parse_repl_params(' '.join(rest))
+            value = params.get('value')
+
+        if value is None:
+            print("Error: value= is required")
+            return
+
+        if '::' not in address:
+            print(f"Error: invalid address '{address}' — expected Cube::Dim.Item:Dim.Item")
+            return
+
+        cube_part, dims_part = address.split('::', 1)
+        dim_specs = dims_part.split(':') if dims_part else []
+
+        # Reject wildcards — address must be a unique cell
+        for spec in dim_specs:
+            spec = spec.strip()
+            if spec == '*' or spec.endswith('.*') or spec == '':
+                print("Error: $ address must resolve to a unique cell (no wildcards)")
+                return
+
+        # Resolve cube
+        cube_id, cube_name = self._resolve_cube_id(cube_part.strip())
+        if not cube_id:
+            print(f"Error: Cube not found: {cube_part.strip()}")
+            return
+
+        # Query cube detail for dimension IDs
+        cube_detail = self.session.query("cube_detail", cube_id=cube_id)
+        if not cube_detail:
+            print("Error: could not query cube detail")
+            return
+        cube_dim_ids = cube_detail.get("dimension_ids", [])
+
+        # Query dimension list for name→ID and item name→ID resolution
+        dim_data = self.session.query("dimension_list")
+        if not dim_data:
+            print("Error: could not query dimension list")
+            return
+
+        # Build dim_name → dim_id map and dim_id → {item_name: item_id} map
+        dim_name_to_id: dict[str, str] = {}
+        item_name_to_id: dict[str, dict[str, str]] = {}
+        for d in dim_data.get("dimensions", []):
+            d_id = d.get("id", "")
+            d_name = d.get("name", d_id)
+            dim_name_to_id[d_name] = d_id
+            item_name_to_id[d_id] = {}
+            for item in d.get("item_list", []):
+                item_name_to_id[d_id][item.get("name", "")] = item.get("id", "")
+
+        # Resolve each Dim.Item spec to an item ID, aligned to cube dimension order
+        # Build a map: dim_id → item_id
+        resolved: dict[str, str] = {}
+        for spec in dim_specs:
+            spec = spec.strip()
+            if '.' not in spec:
+                print(f"Error: invalid dimension spec '{spec}' — expected Dim.Item")
+                return
+            dim_name, item_name = spec.split('.', 1)
+            dim_id = dim_name_to_id.get(dim_name)
+            if dim_id is None:
+                # Try case-insensitive
+                for dn, did in dim_name_to_id.items():
+                    if dn.lower() == dim_name.lower():
+                        dim_id = did
+                        break
+            if dim_id is None:
+                print(f"Error: unknown dimension '{dim_name}'")
+                return
+            if dim_id not in cube_dim_ids:
+                print(f"Error: dimension '{dim_name}' is not part of cube '{cube_name}'")
+                return
+            item_id = item_name_to_id.get(dim_id, {}).get(item_name)
+            if item_id is None:
+                # Try case-insensitive
+                for iname, iid in item_name_to_id.get(dim_id, {}).items():
+                    if iname.lower() == item_name.lower():
+                        item_id = iid
+                        break
+            if item_id is None:
+                print(f"Error: unknown item '{item_name}' in dimension '{dim_name}'")
+                return
+            resolved[dim_id] = item_id
+
+        # Build full address tuple aligned to cube dimension order
+        # Unspecified dimensions use their default (first) item
+        from lib_openm.technical_ids import CHANNEL_TO_AT_ID
+        addr_list: list[str] = []
+        for dim_id in cube_dim_ids:
+            if dim_id == "@":
+                addr_list.append(CHANNEL_TO_AT_ID["value"])
+            elif dim_id in resolved:
+                addr_list.append(resolved[dim_id])
+            else:
+                # Use first item of the dimension as default
+                items = item_name_to_id.get(dim_id, {})
+                if items:
+                    addr_list.append(next(iter(items.values())))
+                else:
+                    print(f"Error: dimension '{dim_id}' has no items")
+                    return
+
+        addr_tuple = tuple(addr_list)
+
+        try:
+            result = self.session.execute(
+                "set_cell_hardvalue_by_addr",
+                cube_id=cube_id,
+                addr=list(addr_tuple),
+                value=value,
+            )
+            if result.success:
+                print(f"Set hval: {address} = {value}")
+            else:
+                print(f"Error: {result.error}")
+        except Exception as e:
+            print(f"Error setting hval: {e}")
+
+    def help_hval(self: OpenMREPLCore):
+        print("\nhval view_id=<id> row=<n> col=<n> value=<value>")
+        print("  hval view_id=<id> row_key=(<id>,) col_key=(<id>,) value=<value>")
+        print("  hval $Cube::Dim.Item:Dim.Item value=<value>")
+        print("  Set a cell hardvalue (overrides rule computation).")
+        print("  Sugar for set_cell / set_cell_hardvalue.")
+        print("  The $-prefixed form uses a full semantic address that must")
+        print("  resolve to a unique cell (no wildcards).")
+        print("  Examples:")
+        print("    hval view_id=view_1 row=0 col=0 value=42")
+        print("    hval view_id=view_1 row_key=(item1,) col_key=(item2,) value=42")
+        print("    hval $Sales::Region.North:Quarter.Q1 value=42")
+
+    def do_hardvalue(self: OpenMREPLCore, arg: str):
+        """
+        Set a cell hardvalue (syntactic sugar for set_cell_hardvalue).
+        Accepts row/col indices, row_key/col_key tuples, or $-prefixed full addresses.
+        Usage: hardvalue view_id=<id> row=<n> col=<n> value=<value>
+               hardvalue view_id=<id> row_key=(<id>,) col_key=(<id>,) value=<value>
+               hardvalue $Cube::Dim.Item:Dim.Item value=<value>
+        """
+        stripped = arg.strip()
+        if stripped.startswith('$'):
+            self._hval_by_address(stripped)
+            return
+        first_token = stripped.split()[0] if stripped else ''
+        if '::' in first_token:
+            self._hval_by_address('$' + stripped)
+            return
+        self.do_set_cell(arg)
+
+    def help_hardvalue(self: OpenMREPLCore):
+        print("\nhardvalue view_id=<id> row=<n> col=<n> value=<value>")
+        print("  hardvalue view_id=<id> row_key=(<id>,) col_key=(<id>,) value=<value>")
+        print("  Set a cell hardvalue (overrides rule computation).")
+        print("  Sugar for set_cell / set_cell_hardvalue.")
+        print("  Examples:")
+        print("    hardvalue view_id=view_1 row=0 col=0 value=42")
+        print("    hardvalue view_id=view_1 row_key=(item1,) col_key=(item2,) value=42")
+
     def do_clear_cell(self: OpenMREPLCore, arg: str):
         """
         Clear a cell value by row and column indices.

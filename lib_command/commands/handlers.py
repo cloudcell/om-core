@@ -187,10 +187,12 @@ def handle_create_dimension_item(
     cmd: AddDimensionItemCommand, engine: Any, bus: Any, ctx: Any = None
 ) -> _HandlerResult[Any]:
     item = engine.create_dimension_item(cmd.dim_id, cmd.name, position=cmd.position)
+    # RemoteEngine returns a dict; Python engine returns a DimensionItem object
+    item_id = item["id"] if isinstance(item, dict) else item.id
     publish_domain_event(
         bus,
         "event.dimension_item.created",
-        {"dim_id": cmd.dim_id, "item_id": item.id, "name": cmd.name},
+        {"dim_id": cmd.dim_id, "item_id": item_id, "name": cmd.name},
         correlation_id=getattr(ctx, "correlation_id", None),
         session_id=getattr(ctx, "session_id", None),
         causation_id=getattr(ctx, "command_message_id", None),
@@ -201,13 +203,13 @@ def handle_create_dimension_item(
         DimensionStructureChangedEvent(
             dim_id=cmd.dim_id,
             reason="add_dimension_item",
-            affected_node_ids=[item.id],
+            affected_node_ids=[item_id],
         ),
         correlation_id=getattr(ctx, "correlation_id", None),
         session_id=getattr(ctx, "session_id", None),
         causation_id=getattr(ctx, "command_message_id", None),
     )
-    return _HandlerResult(ok=True, data={"id": item.id})
+    return _HandlerResult(ok=True, data={"id": item_id})
 
 
 def handle_create_group(

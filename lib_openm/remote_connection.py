@@ -15,6 +15,7 @@ import os
 import socket
 import struct
 import threading
+import time
 import uuid
 from typing import Any
 from urllib.parse import urlparse
@@ -116,6 +117,9 @@ class Connection:
     """
 
     _DEFAULT_TIMEOUT = 60.0  # seconds
+    _RETRY_DELAYS = (0.1, 0.3)  # seconds between reconnect attempts
+    _CIRCUIT_BREAKER_THRESHOLD = 5  # consecutive failures to trip
+    _CIRCUIT_BREAKER_COOLDOWN = 2.0  # seconds before allowing a probe
 
     def __init__(self, endpoint: str, timeout: float | None = None) -> None:
         self._endpoint = endpoint
@@ -124,6 +128,8 @@ class Connection:
         self._connected = False
         self._timeout = timeout or self._DEFAULT_TIMEOUT
         self._lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
 
     @property
     def is_connected(self) -> bool:
@@ -165,11 +171,68 @@ class Connection:
         Thread-safe: serializes concurrent calls so multiple threads can
         share a single connection without corrupting the wire protocol.
 
+        Retries up to 2 times on transient connection errors (ConnectionRefused,
+        BrokenPipe, ConnectionReset) with a short backoff to let the server
+        recover from overload.
+
+        A circuit breaker prevents retry storms when the server is down:
+        after _CIRCUIT_BREAKER_THRESHOLD consecutive failures, calls fail
+        fast for _CIRCUIT_BREAKER_COOLDOWN seconds before allowing a probe.
+
         Raises RemoteEngineError (or a mapped subclass) on server errors.
         Raises EngineShuttingDownError if the connection is lost.
         """
         with self._lock:
-            return self._call_locked(method, *args, **kwargs)
+            # Circuit breaker: fail fast if the server is down.
+            now = time.monotonic()
+            if self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD:
+                if now < self._circuit_open_until:
+                    raise ConnectionRefusedError(
+                        f"Circuit breaker open: server unreachable "
+                        f"({self._consecutive_failures} consecutive failures)"
+                    )
+
+            last_exc: Exception | None = None
+            for attempt in range(1 + len(self._RETRY_DELAYS)):
+                try:
+                    result = self._call_locked(method, *args, **kwargs)
+                    self._consecutive_failures = 0
+                    return result
+                except (ConnectionRefusedError, ConnectionResetError,
+                        BrokenPipeError, ConnectionAbortedError) as exc:
+                    last_exc = exc
+                    self._close_socket()
+                    self._consecutive_failures += 1
+                    if self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD:
+                        self._circuit_open_until = time.monotonic() + self._CIRCUIT_BREAKER_COOLDOWN
+                        _log.warning(
+                            "Circuit breaker tripped after %d consecutive failures during %s",
+                            self._consecutive_failures, method,
+                        )
+                        raise
+                    if attempt < len(self._RETRY_DELAYS):
+                        _log.warning(
+                            "Connection error during %s (attempt %d/%d): %s — retrying in %.1fs",
+                            method, attempt + 1, 1 + len(self._RETRY_DELAYS),
+                            exc, self._RETRY_DELAYS[attempt],
+                        )
+                        time.sleep(self._RETRY_DELAYS[attempt])
+                    else:
+                        _log.warning(
+                            "Connection error during %s after %d attempts: %s",
+                            method, 1 + len(self._RETRY_DELAYS), exc,
+                        )
+            raise last_exc  # type: ignore[misc]
+
+    def _close_socket(self) -> None:
+        """Close the current socket and mark as disconnected."""
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        self._connected = False
 
     def _call_locked(self, method: str, *args: Any, **kwargs: Any) -> Any:
         if not self._connected or self._sock is None:
@@ -186,11 +249,20 @@ class Connection:
             },
             use_bin_type=True,
         )
-        self._sock.sendall(struct.pack(">I", len(payload)) + payload)
+        try:
+            self._sock.sendall(struct.pack(">I", len(payload)) + payload)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            self._close_socket()
+            raise
 
-        resp_bytes = self._recv_frame()
+        try:
+            resp_bytes = self._recv_frame()
+        except (TimeoutError, OSError):
+            self._close_socket()
+            raise
+
         if not resp_bytes:
-            self._connected = False
+            self._close_socket()
             from lib_openm.engine_state import EngineShuttingDownError
 
             raise EngineShuttingDownError("server closed connection before responding")

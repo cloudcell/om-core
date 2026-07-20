@@ -7178,6 +7178,8 @@ class _EngineCore:
                             target_item = dim.items[0] if dim.items else None
                         elif item_upper == "LAST":
                             target_item = dim.items[-1] if dim.items else None
+                    if item_name == "*":
+                        continue
                     if target_item is None:
                         target_item = next(
                             (it for it in dim.items if it.name.lower() == item_name.lower()),

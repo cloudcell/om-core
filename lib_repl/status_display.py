@@ -134,7 +134,20 @@ class StatusDisplay:
         if command_id == "query":
             return
         error = event.payload.get('__error') or event.payload.get('error')
+        # Extract command arguments from the payload for diagnostics
+        arg_parts = []
+        for k, v in event.payload.items():
+            if k in ('__error', 'error', 'command_id'):
+                continue
+            arg_parts.append(f"{k}={v!r}")
+        args_str = " ".join(arg_parts) if arg_parts else ""
         if error:
-            self._print(f"[FAIL] {command_id}: {error}", event=event)
+            if args_str:
+                self._print(f"[FAIL] {command_id} {args_str}: {error}", event=event)
+            else:
+                self._print(f"[FAIL] {command_id}: {error}", event=event)
         else:
-            self._print(f"[FAIL] {command_id}", event=event)
+            if args_str:
+                self._print(f"[FAIL] {command_id} {args_str}", event=event)
+            else:
+                self._print(f"[FAIL] {command_id}", event=event)

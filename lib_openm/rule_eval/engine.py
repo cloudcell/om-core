@@ -1458,6 +1458,8 @@ class RuleEvaluator:
             v = self._eval(arg, resolver, addr)
             if self._is_error(v):
                 return v
+            if isinstance(v, str):
+                return CellError("#VALUE!")
             if not v or v == 0:
                 return 0.0
         return 1.0
@@ -1468,6 +1470,8 @@ class RuleEvaluator:
             v = self._eval(arg, resolver, addr)
             if self._is_error(v):
                 return v
+            if isinstance(v, str):
+                return CellError("#VALUE!")
             if v and v != 0:
                 return 1.0
         return 0.0
@@ -1475,7 +1479,11 @@ class RuleEvaluator:
     def _fn_not(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)
         v = self._eval(node.args[0], resolver, addr)
-        return v if self._is_error(v) else (0.0 if v and v != 0 else 1.0)
+        if self._is_error(v):
+            return v
+        if isinstance(v, str):
+            return CellError("#VALUE!")
+        return 0.0 if v and v != 0 else 1.0
 
     def _fn_xor(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, min_args=1)
@@ -1484,6 +1492,8 @@ class RuleEvaluator:
             v = self._eval(arg, resolver, addr)
             if self._is_error(v):
                 return v
+            if isinstance(v, str):
+                return CellError("#VALUE!")
             if v and v != 0:
                 true_count += 1
         return 1.0 if (true_count % 2 == 1) else 0.0
@@ -1503,7 +1513,7 @@ class RuleEvaluator:
         if isinstance(v, str):
             text = v.strip()
             if not text:
-                return 0.0
+                return CellError("#VALUE!")
             try:
                 return float(text)
             except ValueError:
@@ -1730,7 +1740,9 @@ class RuleEvaluator:
         if self._is_error(text):
             return text
         formatted_text = self._format_for_string(text)
-        return 0.0 if not formatted_text else float(ord(formatted_text[0]))
+        if not formatted_text:
+            return 0.0
+        return float(ord(formatted_text[0]))
 
     def _fn_char(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, exact=1)

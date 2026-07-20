@@ -41,6 +41,10 @@ def publish_events(
                 _log.warning("Unknown event_id %s from server", event_id)
                 continue
             payload = evt.get("payload") or {}
+            # BusEventPublisher.publish prepends "event." to the topic_suffix,
+            # so strip it if present to avoid double-prefixing.
+            if topic.startswith("event."):
+                topic = topic[len("event."):]
             publisher.publish(topic, payload, engine)
         except Exception:
             _log.exception("Failed to publish remote event: %s", evt.get("event_id"))

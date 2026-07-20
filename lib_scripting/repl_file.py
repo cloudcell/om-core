@@ -414,7 +414,7 @@ class REPLFileMixin:
                 print(f"Executed {executed} commands, {len(errors)} errors:")
                 for line_num, err, line in errors:
                     print(f"  Line {line_num}: {err}")
-                    print(f"    {line[:60]}...")
+                    print(f"    {line}")
             else:
                 print(f"Executed {executed} commands from {filepath.name}")
 

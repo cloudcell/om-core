@@ -405,8 +405,9 @@ class RulePanel(QtWidgets.QWidget):
                 continue
             # Handle @ technical dimension specially - show as @.channel
             if dim_id == "@":
-                if item_id.startswith("@."):
-                    channel_name = item_id[2:]  # Remove "@." prefix
+                items = dim.get("items", [])
+                channel_name = next((it.get("name") for it in items if it.get("id") == item_id), None)
+                if channel_name:
                     parts.append(f"@.{channel_name}")
                 else:
                     parts.append(item_id)

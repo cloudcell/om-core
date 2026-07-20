@@ -53,6 +53,32 @@ def _deserialize_value(v: Any) -> tuple[Any, bool]:
     Returns tuple of (value, is_hardcoded) where is_hardcoded indicates
     if this value was user-entered (True) or computed (False).
     """
+    if isinstance(v, list):
+        # Alternative array format: ["type", value]
+        if len(v) < 1:
+            return (None, True)
+        vtype = v[0]
+        val = v[1] if len(v) > 1 else None
+        if vtype == "number":
+            return (val, False)
+        if vtype == "text":
+            text = val if val is not None else ""
+            if isinstance(text, str):
+                if text == "TRUE":
+                    return (True, False)
+                if text == "FALSE":
+                    return (False, False)
+                if text.startswith("#") and text.endswith("!"):
+                    return (CellError(text), False)
+                if text in ("NaN", "Inf", "-Inf"):
+                    return (CellError("#NUM!"), False)
+            return (text, False)
+        if vtype == "error":
+            return (CellError(val) if val else CellError("#EXPRESSION!"), False)
+        if vtype == "null":
+            return (None, False)
+        return (v, True)
+    
     if not isinstance(v, dict):
         # Legacy format: plain values - treat as hardcoded by default
         return (v, True)

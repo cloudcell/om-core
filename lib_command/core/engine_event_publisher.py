@@ -37,6 +37,12 @@ class BusEventPublisher(EventPublisher):
     ) -> None:
         try:
             enriched_payload = self.projector.enrich(topic_suffix, payload, engine)
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Failed to enrich engine event: event.%s — publishing unenriched payload", topic_suffix
+            )
+            enriched_payload = payload
+        try:
             envelope = MessageEnvelope(
                 message_id=str(uuid.uuid4()),
                 message_type="event",

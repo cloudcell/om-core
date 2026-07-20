@@ -741,6 +741,7 @@ def register_default_commands(registry: CommandRegistry | None = None) -> Comman
         cmd_set_view_axes,
         cmd_delete_cube,
         cmd_delete_dimension,
+        cmd_set_cell_hardvalue_by_addr,
     )
 
     # Canonical cell value commands (hardvalue / rule separation)
@@ -935,6 +936,16 @@ def register_default_commands(registry: CommandRegistry | None = None) -> Comman
             cmd_delete_dimension,
             description="Delete a dimension, detaching it from all cubes and views first",
             params={"dim_id": str},
+        )
+
+    if not registry.is_registered("set_cell_hardvalue_by_addr"):
+        registry.register(
+            "set_cell_hardvalue_by_addr",
+            "Set Cell Hardvalue By Address",
+            CommandCategory.DATA,
+            cmd_set_cell_hardvalue_by_addr,
+            description="Set a user hardvalue using a full cube address tuple",
+            params={"cube_id": str, "addr": list, "value": object},
         )
 
     # === Phase 1C: Range / Paste Command ===

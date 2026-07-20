@@ -20,7 +20,7 @@ def workspace_to_msgpack_dict(ws: Any) -> dict[str, Any]:
     from lib_openm.lib_meta.bootstrap import ensure_system_cubes
     from lib_openm.outline_graph_bridge import migrate_workspace_outline_to_graph, extract_graph_for_remote
     from lib_openm.udf_registry import get_default_registry
-    from lib_openm.technical_ids import normalize_addr
+    from lib_openm.technical_ids import normalize_addr, CHANNEL_TO_AT_ID
 
     ensure_system_cubes(ws)
     migrate_workspace_outline_to_graph(ws)
@@ -35,14 +35,19 @@ def workspace_to_msgpack_dict(ws: Any) -> dict[str, Any]:
     # The "@" (channel) dimension is virtual in Python — it's never stored in
     # ws.dimensions but appears in cube.dimension_ids.  The remote server requires
     # every dimension ID referenced by a cube to exist in the dimensions map,
-    # so we inject a synthetic entry.
+    # so we inject a synthetic entry with all technical channel items so the
+    # remote engine can resolve channel names (e.g. "fill") to their canonical
+    # item IDs (e.g. "at_fill") when building rule masks.
     if "@" not in dimensions_dict:
         dimensions_dict["@"] = {
             "id": "@",
             "name": "@",
             "dim_type": "set",
             "is_technical": True,
-            "items": [],
+            "items": [
+                {"id": at_id, "name": ch}
+                for ch, at_id in CHANNEL_TO_AT_ID.items()
+            ],
         }
 
     ws_dict: dict[str, Any] = {
