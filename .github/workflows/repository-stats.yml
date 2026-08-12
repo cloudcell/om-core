@@ -2,7 +2,6 @@ name: Repository all-time statistics
 
 on:
   schedule:
-    # Four times per UTC day. Offset from the hour to reduce GitHub cron congestion.
     - cron: "17 0,6,12,18 * * *"
   workflow_dispatch:
 
@@ -26,12 +25,15 @@ jobs:
       - name: Collect and render statistics
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TRAFFIC_TOKEN: ${{ secrets.GH_TRAFFIC_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python3 scripts/github_all_time_stats.py
 
-      - name: Commit generated statistics
+      - name: Commit and push generated statistics
+        shell: bash
         run: |
-          # Stage first so newly-created/untracked stats files are included.
+          set -euo pipefail
+
           git add README.md stats/
 
           if git diff --cached --quiet; then
@@ -43,4 +45,21 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git commit -m "chore(stats): update repository statistics [skip ci]"
-          git push
+
+          for attempt in 1 2 3 4 5; do
+            echo "Push attempt ${attempt}/5"
+
+            git fetch origin main
+            git rebase origin/main
+
+            if git push origin HEAD:main; then
+              echo "Statistics pushed successfully."
+              exit 0
+            fi
+
+            echo "Remote main changed during push; retrying..."
+            sleep $((attempt * 2))
+          done
+
+          echo "Failed to push statistics after 5 attempts."
+          exit 1

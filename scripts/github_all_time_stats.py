@@ -85,12 +85,19 @@ def zulu(v: dt.datetime) -> str:
     return v.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def api(path: str, *, accept: str = "application/vnd.github+json", retries: int = 4) -> Any:
+def api(
+    path: str,
+    *,
+    accept: str = "application/vnd.github+json",
+    retries: int = 4,
+    token: str | None = None,
+) -> Any:
+    auth_token = token or os.environ["GITHUB_TOKEN"]
     req = urllib.request.Request(
         API + path,
         headers={
             "Accept": accept,
-            "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+            "Authorization": f"Bearer {auth_token}",
             "X-GitHub-Api-Version": API_VERSION,
             "User-Agent": "persistent-github-repository-statistics",
         },
@@ -109,12 +116,21 @@ def api(path: str, *, accept: str = "application/vnd.github+json", retries: int 
     raise RuntimeError(f"{path}: {last}")
 
 
-def api_all(path: str, *, accept: str = "application/vnd.github+json") -> list[Any]:
+def api_all(
+    path: str,
+    *,
+    accept: str = "application/vnd.github+json",
+    token: str | None = None,
+) -> list[Any]:
     out: list[Any] = []
     page = 1
     while True:
         sep = "&" if "?" in path else "?"
-        batch = api(f"{path}{sep}per_page=100&page={page}", accept=accept)
+        batch = api(
+            f"{path}{sep}per_page=100&page={page}",
+            accept=accept,
+            token=token,
+        )
         if not isinstance(batch, list):
             raise RuntimeError(f"Expected list from {path}")
         out.extend(batch)
@@ -123,9 +139,14 @@ def api_all(path: str, *, accept: str = "application/vnd.github+json") -> list[A
         page += 1
 
 
-def try_api(path: str, *, accept: str = "application/vnd.github+json") -> tuple[Any, str | None]:
+def try_api(
+    path: str,
+    *,
+    accept: str = "application/vnd.github+json",
+    token: str | None = None,
+) -> tuple[Any, str | None]:
     try:
-        return api(path, accept=accept), None
+        return api(path, accept=accept, token=token), None
     except Exception as exc:
         return None, str(exc)
 
@@ -213,18 +234,35 @@ def merge_traffic(
 
 def traffic_start_from_state_or_payload(
     state: dict[str, Any],
+    rows: dict[str, dict[str, str]],
     seen_views: list[dt.date],
     seen_clones: list[dt.date],
     today: dt.date,
 ) -> dt.date:
+    """
+    Determine the trustworthy beginning of retained traffic history.
+
+    A previous run may have persisted a start date while every traffic request
+    failed with HTTP 403. If no real traffic value has ever been stored, the
+    first successful traffic fetch is treated as a fresh bootstrap.
+    """
+    has_real_traffic = any(
+        row.get("views", "") != "" or row.get("clones", "") != ""
+        for row in rows.values()
+    )
+
+    seen = seen_views + seen_clones
+
+    if has_real_traffic and state.get("traffic_tracking_started"):
+        return parse_date(state["traffic_tracking_started"])
+
+    if seen:
+        return min(seen)
+
     if state.get("traffic_tracking_started"):
         return parse_date(state["traffic_tracking_started"])
 
-    seen = seen_views + seen_clones
-    # First run normally receives the oldest available daily bucket.
-    # If GitHub temporarily returns no buckets, reserve the currently recoverable
-    # interval so a later successful run can still fill it.
-    return min(seen) if seen else today - dt.timedelta(days=13)
+    return today - dt.timedelta(days=13)
 
 
 def mark_traffic_coverage(
@@ -933,16 +971,40 @@ def main() -> None:
     owner, repo_name = os.environ["GITHUB_REPOSITORY"].split("/",1)
     base = f"/repos/{owner}/{repo_name}"
 
+    traffic_token = os.environ.get("GH_TRAFFIC_TOKEN", "").strip()
+    if not traffic_token:
+        raise RuntimeError(
+            "GH_TRAFFIC_TOKEN is not configured. Add a repository Actions secret "
+            "named GH_TRAFFIC_TOKEN containing a fine-grained GitHub token scoped "
+            "to this repository with Administration: Read permission."
+        )
+
     state = load_json(STATE, {})
     rows = load_daily()
 
     repo, repo_err = try_api(base)
-    views, views_err = try_api(f"{base}/traffic/views?per=day")
-    clones, clones_err = try_api(f"{base}/traffic/clones?per=day")
-    referrers, referrers_err = try_api(f"{base}/traffic/popular/referrers")
+    views, views_err = try_api(
+        f"{base}/traffic/views?per=day",
+        token=traffic_token,
+    )
+    clones, clones_err = try_api(
+        f"{base}/traffic/clones?per=day",
+        token=traffic_token,
+    )
+    referrers, referrers_err = try_api(
+        f"{base}/traffic/popular/referrers",
+        token=traffic_token,
+    )
     if referrers is not None and not isinstance(referrers, list):
         referrers_err = "Unexpected non-list response from popular/referrers"
         referrers = None
+
+    traffic_errors = [e for e in (views_err, clones_err) if e]
+    if traffic_errors:
+        raise RuntimeError(
+            "GitHub traffic API failed. Check GH_TRAFFIC_TOKEN permissions. "
+            + " | ".join(traffic_errors)
+        )
 
     seen_views = merge_traffic(
         rows, views,
@@ -961,7 +1023,13 @@ def main() -> None:
         today=today,
     )
 
-    traffic_start = traffic_start_from_state_or_payload(state, seen_views, seen_clones, today)
+    traffic_start = traffic_start_from_state_or_payload(
+        state,
+        rows,
+        seen_views,
+        seen_clones,
+        today,
+    )
     state["traffic_tracking_started"] = traffic_start.isoformat()
     state["last_updated_utc"] = zulu(now)
 
