@@ -172,5 +172,7 @@ _FUNCTIONS = {
     "NOW",
     "WEEKDAY",
     "WEEKNUM",
+    "CHOOSE",
+    "TEXT",
 }
 _FUNCTIONS |= XLS_FUNCTIONS

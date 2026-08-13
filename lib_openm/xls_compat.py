@@ -195,7 +195,7 @@ def _xls_text(value: Any, fmt: Any) -> str:
     try:
         num = float(value)
     except Exception:
-        return str(value)
+        return _xls_stringify(value)
 
     if len(sections) >= 3 and num == 0:
         chosen = sections[2]
@@ -207,7 +207,10 @@ def _xls_text(value: Any, fmt: Any) -> str:
     if _looks_like_date_time_mask(chosen):
         return _format_excel_datetime_mask(num, chosen)
 
-    return _format_number_with_mask(num, chosen)
+    result = _format_number_with_mask(num, chosen)
+    if num < 0 and len(sections) == 1 and not result.startswith("-"):
+        return "-" + result
+    return result
 
 
 def _excel_year_from_value(v: Any) -> float:
@@ -373,14 +376,46 @@ def _xls_irr(values: list[Any], guess: float = 0.1) -> float:
     raise ValueError("xls_irr failed to converge")
 
 
+def _xls_stringify(v: Any) -> str:
+    """Convert a value to string using Excel 'General' format.
+
+    Whole numbers are rendered without a trailing .0 (e.g. 1.0 -> '1', -1.0 -> '-1').
+    Non-integer floats use str(v) which gives shortest round-trip representation.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, float):
+        if v == int(v) and abs(v) < 1e16:
+            return str(int(v))
+        return repr(v) if abs(v) >= 1e16 else str(v)
+    if isinstance(v, int):
+        return str(v)
+    return str(v)
+
+
 def eval_xls_function(fn: str, args: list[Any], *, eval_node: Callable[[Any], Any]) -> Any:
+    try:
+        return _eval_xls_function_impl(fn, args, eval_node=eval_node)
+    except (ValueError, TypeError):
+        return CellError("#VALUE!")
+
+
+def _eval_xls_function_impl(fn: str, args: list[Any], *, eval_node: Callable[[Any], Any]) -> Any:
     if fn == "XLS_IF":
         if len(args) != 3:
             raise ValueError("xls_if requires 3 arguments")
         cond = eval_node(args[0])
         if isinstance(cond, CellError):
             return cond
-        return eval_node(args[1] if cond else args[2])
+        if isinstance(cond, str):
+            raise ValueError("xls_if condition must be numeric or boolean")
+        if isinstance(cond, (int, float, bool)):
+            return eval_node(args[1] if cond else args[2])
+        if cond is None:
+            return eval_node(args[2])
+        raise ValueError("xls_if condition must be numeric or boolean")
 
     if fn == "XLS_XIRR":
         if len(args) not in (2, 3):
@@ -440,7 +475,7 @@ def eval_xls_function(fn: str, args: list[Any], *, eval_node: Callable[[Any], An
             v = eval_node(arg)
             if isinstance(v, CellError):
                 return v
-            parts.append("" if v is None else str(v))
+            parts.append(_xls_stringify(v))
         return "".join(parts)
 
     if fn == "XLS_DATE":
@@ -463,7 +498,7 @@ def eval_xls_function(fn: str, args: list[Any], *, eval_node: Callable[[Any], An
             return v
         if v is None:
             return ""
-        return str(v).upper()
+        return _xls_stringify(v).upper()
 
     if fn == "XLS_TEXT":
         if len(args) != 2:
@@ -474,7 +509,7 @@ def eval_xls_function(fn: str, args: list[Any], *, eval_node: Callable[[Any], An
             return v
         if isinstance(fmt, CellError):
             return fmt
-        return _xls_text(v, fmt)
+        return _xls_text(v, _xls_stringify(fmt))
 
     if fn == "XLS_TODAY":
         if args:
@@ -496,7 +531,7 @@ def eval_xls_function(fn: str, args: list[Any], *, eval_node: Callable[[Any], An
         num_times = eval_node(args[1])
         if isinstance(num_times, CellError):
             return num_times
-        text_str = str(text) if text is not None else ""
+        text_str = _xls_stringify(text)
         repeat_count = int(float(num_times))
         if repeat_count < 0:
             raise ValueError("xls_rept repeat count must be >= 0")
@@ -512,10 +547,9 @@ def eval_xls_function(fn: str, args: list[Any], *, eval_node: Callable[[Any], An
         text = eval_node(args[0])
         if isinstance(text, CellError):
             return text
-        text_str = str(text) if text is not None else ""
+        text_str = _xls_stringify(text)
         if not text_str:
-            # Return 0 for empty string (Excel compatibility)
-            return 0.0
+            raise ValueError("xls_code requires a non-empty string")
         return float(ord(text_str[0]))
 
     if fn == "XLS_CHAR":
@@ -556,7 +590,13 @@ def eval_xls_function(fn: str, args: list[Any], *, eval_node: Callable[[Any], An
         if len(vals) not in (1, 2):
             raise ValueError("xls_round requires 1 or 2 arguments")
         places = int(vals[1]) if len(vals) == 2 else 0
-        return round(vals[0], places)
+        val = vals[0]
+        if places >= 0:
+            factor = 10.0 ** places
+            return math.floor(abs(val) * factor + 0.5) / factor * (1.0 if val >= 0 else -1.0)
+        else:
+            factor = 10.0 ** (-places)
+            return math.floor(abs(val) / factor + 0.5) * factor * (1.0 if val >= 0 else -1.0)
 
     if fn == "XLS_VALUE":
         if len(vals) != 1:

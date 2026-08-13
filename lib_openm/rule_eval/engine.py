@@ -16,6 +16,7 @@ from lib_openm.xls_compat import (
     _excel_year_from_value,
     _excel_serial_from_date,
     _excel_serial_from_datetime,
+    _xls_text,
 )
 
 from .ast_nodes import (
@@ -132,6 +133,8 @@ class RuleEvaluator:
             "XLS_IRR": self._eval_xls_irr_wrapper,
             # Conditional
             "IF": self._fn_if,
+            "CHOOSE": self._fn_choose,
+            "TEXT": self._fn_text,
             # Math functions
             "ABS": self._fn_abs,
             "ROUND": self._fn_round,
@@ -1171,6 +1174,34 @@ class RuleEvaluator:
             return CellError("#VALUE!")
         branch = node.args[1] if cond else node.args[2]
         return self._eval(branch, resolver, addr)
+
+    def _fn_choose(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
+        """CHOOSE(index, value1, value2, ...) — returns the value at the 1-based index."""
+        self._require_argc(node, min_args=2)
+        index_val = self._eval(node.args[0], resolver, addr)
+        if self._is_error(index_val):
+            return index_val
+        if isinstance(index_val, str):
+            return CellError("#VALUE!")
+        index_val = self._coerce_number(index_val)
+        if self._is_error(index_val):
+            return index_val
+        index = int(index_val)
+        if index < 1 or index >= len(node.args):
+            return CellError("#VALUE!")
+        return self._eval(node.args[index], resolver, addr)
+
+    def _fn_text(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
+        """TEXT(value, format_text) — converts a value to text using a format mask."""
+        self._require_argc(node, exact=2)
+        v = self._eval(node.args[0], resolver, addr)
+        if self._is_error(v):
+            return v
+        fmt = self._eval(node.args[1], resolver, addr)
+        if self._is_error(fmt):
+            return fmt
+        fmt_str = self._format_for_string(fmt)
+        return _xls_text(v, fmt_str)
 
     # Math functions
     def _fn_abs(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
