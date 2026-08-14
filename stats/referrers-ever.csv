@@ -1,6 +1,6 @@
 referrer,first_seen_utc,last_seen_utc,observations,latest_14d_visits,latest_14d_unique_visitors,max_observed_14d_visits,max_observed_14d_unique_visitors,currently_in_top_10
-Bing,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,1,1,1,1,true
-github.com,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,90,8,90,8,true
-Google,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,4,3,4,3,true
-linkedin.com,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,5,5,5,5,true
-news.ycombinator.com,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,1,1,1,1,true
+Bing,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,1,1,1,1,false
+github.com,2026-08-12T07:04:15Z,2026-08-14T13:48:11Z,11,90,8,90,8,true
+Google,2026-08-12T07:04:15Z,2026-08-14T13:48:11Z,11,4,3,4,3,true
+linkedin.com,2026-08-12T07:04:15Z,2026-08-14T13:48:11Z,11,5,5,5,5,true
+news.ycombinator.com,2026-08-12T07:04:15Z,2026-08-14T13:48:11Z,11,1,1,1,1,true
