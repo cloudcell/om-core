@@ -1,5 +1,5 @@
 observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
-2026-08-14T13:48:11Z,rolling_14d,1,github.com,90,8
-2026-08-14T13:48:11Z,rolling_14d,2,linkedin.com,5,5
-2026-08-14T13:48:11Z,rolling_14d,3,Google,4,3
-2026-08-14T13:48:11Z,rolling_14d,4,news.ycombinator.com,1,1
+2026-08-14T19:17:19Z,rolling_14d,1,github.com,90,8
+2026-08-14T19:17:19Z,rolling_14d,2,linkedin.com,5,5
+2026-08-14T19:17:19Z,rolling_14d,3,Google,4,3
+2026-08-14T19:17:19Z,rolling_14d,4,news.ycombinator.com,1,1
