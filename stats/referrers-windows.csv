@@ -61,3 +61,7 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-08-15T01:52:57Z,rolling_14d,2,linkedin.com,5,5
 2026-08-15T01:52:57Z,rolling_14d,3,Google,4,3
 2026-08-15T01:52:57Z,rolling_14d,4,news.ycombinator.com,1,1
+2026-08-15T07:00:51Z,rolling_14d,1,github.com,90,8
+2026-08-15T07:00:51Z,rolling_14d,2,linkedin.com,5,5
+2026-08-15T07:00:51Z,rolling_14d,3,Google,4,3
+2026-08-15T07:00:51Z,rolling_14d,4,news.ycombinator.com,1,1
