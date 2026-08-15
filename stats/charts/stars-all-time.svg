@@ -13,14 +13,14 @@
 <line x1="72" x2="1075" y1="58.0" y2="58.0" stroke="#21262d"/>
 <text x="64" y="62.0" text-anchor="end" fill="#8b949e" font-family="system-ui,sans-serif" font-size="11">18</text>
 <text x="72.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-06-29</text>
-<text x="224.6" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-06</text>
-<text x="355.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-12</text>
-<text x="508.1" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-19</text>
-<text x="638.9" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-25</text>
-<text x="791.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-01</text>
-<text x="922.4" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-07</text>
-<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-14</text>
-<polyline points="93.8,252.3 115.6,228.5 137.4,228.5 159.2,121.6 181.0,121.6 202.8,109.8 224.6,109.8 246.4,109.8 268.2,97.9 290.0,86.0 311.8,86.0 333.7,86.0 355.5,86.0 377.3,86.0 399.1,74.1 420.9,74.1 442.7,74.1 464.5,74.1 486.3,74.1 508.1,74.1 529.9,74.1 551.7,74.1 573.5,74.1 595.3,74.1 617.1,74.1 638.9,74.1 660.7,74.1 682.5,74.1 704.3,74.1 726.1,74.1 747.9,74.1 769.7,74.1 791.5,74.1 813.3,74.1 835.2,74.1 857.0,74.1 878.8,74.1 900.6,74.1 922.4,74.1 944.2,74.1 966.0,74.1 987.8,74.1 1009.6,74.1 1031.4,74.1 1053.2,74.1 1075.0,74.1" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="221.4" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-06</text>
+<text x="349.4" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-12</text>
+<text x="498.8" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-19</text>
+<text x="648.2" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-26</text>
+<text x="797.6" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-02</text>
+<text x="925.6" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-08</text>
+<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-15</text>
+<polyline points="93.3,252.3 114.7,228.5 136.0,228.5 157.4,121.6 178.7,121.6 200.0,109.8 221.4,109.8 242.7,109.8 264.1,97.9 285.4,86.0 306.7,86.0 328.1,86.0 349.4,86.0 370.8,86.0 392.1,74.1 413.4,74.1 434.8,74.1 456.1,74.1 477.5,74.1 498.8,74.1 520.1,74.1 541.5,74.1 562.8,74.1 584.2,74.1 605.5,74.1 626.9,74.1 648.2,74.1 669.5,74.1 690.9,74.1 712.2,74.1 733.6,74.1 754.9,74.1 776.2,74.1 797.6,74.1 818.9,74.1 840.3,74.1 861.6,74.1 882.9,74.1 904.3,74.1 925.6,74.1 947.0,74.1 968.3,74.1 989.6,74.1 1011.0,74.1 1032.3,74.1 1053.7,74.1 1075.0,74.1" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="72" x2="96" y1="322" y2="322" stroke="#2f81f7" stroke-width="3"/>
 <text x="102" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Stars</text>
 </svg>
