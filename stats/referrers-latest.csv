@@ -1,7 +1,7 @@
 observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
-2026-08-20T13:14:52Z,rolling_14d,1,github.com,56,8
-2026-08-20T13:14:52Z,rolling_14d,2,Google,14,4
-2026-08-20T13:14:52Z,rolling_14d,3,linkedin.com,2,2
-2026-08-20T13:14:52Z,rolling_14d,4,news.ycombinator.com,1,1
-2026-08-20T13:14:52Z,rolling_14d,5,search.brave.com,1,1
-2026-08-20T13:14:52Z,rolling_14d,6,vuink.com,1,1
+2026-08-20T19:04:27Z,rolling_14d,1,github.com,56,8
+2026-08-20T19:04:27Z,rolling_14d,2,Google,14,4
+2026-08-20T19:04:27Z,rolling_14d,3,linkedin.com,2,2
+2026-08-20T19:04:27Z,rolling_14d,4,news.ycombinator.com,1,1
+2026-08-20T19:04:27Z,rolling_14d,5,search.brave.com,1,1
+2026-08-20T19:04:27Z,rolling_14d,6,vuink.com,1,1
