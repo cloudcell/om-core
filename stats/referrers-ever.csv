@@ -1,8 +1,8 @@
 referrer,first_seen_utc,last_seen_utc,observations,latest_14d_visits,latest_14d_unique_visitors,max_observed_14d_visits,max_observed_14d_unique_visitors,currently_in_top_10
 Bing,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,1,1,1,1,false
-github.com,2026-08-12T07:04:15Z,2026-08-21T02:00:49Z,37,56,8,95,9,true
-Google,2026-08-12T07:04:15Z,2026-08-21T02:00:49Z,37,14,4,14,4,true
-linkedin.com,2026-08-12T07:04:15Z,2026-08-21T02:00:49Z,37,2,2,5,5,true
-news.ycombinator.com,2026-08-12T07:04:15Z,2026-08-21T02:00:49Z,37,1,1,1,1,true
-search.brave.com,2026-08-20T13:14:52Z,2026-08-21T02:00:49Z,3,1,1,1,1,true
-vuink.com,2026-08-18T13:11:47Z,2026-08-21T02:00:49Z,11,1,1,1,1,true
+github.com,2026-08-12T07:04:15Z,2026-08-21T07:10:59Z,38,56,8,95,9,true
+Google,2026-08-12T07:04:15Z,2026-08-21T07:10:59Z,38,14,4,14,4,true
+linkedin.com,2026-08-12T07:04:15Z,2026-08-21T07:10:59Z,38,2,2,5,5,true
+news.ycombinator.com,2026-08-12T07:04:15Z,2026-08-21T07:10:59Z,38,1,1,1,1,true
+search.brave.com,2026-08-20T13:14:52Z,2026-08-21T07:10:59Z,4,1,1,1,1,true
+vuink.com,2026-08-18T13:11:47Z,2026-08-21T07:10:59Z,12,1,1,1,1,true
