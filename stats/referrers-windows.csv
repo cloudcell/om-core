@@ -202,3 +202,8 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-08-22T13:03:43Z,rolling_14d,3,linkedin.com,1,1
 2026-08-22T13:03:43Z,rolling_14d,4,search.brave.com,1,1
 2026-08-22T13:03:43Z,rolling_14d,5,vuink.com,1,1
+2026-08-22T18:51:42Z,rolling_14d,1,github.com,56,9
+2026-08-22T18:51:42Z,rolling_14d,2,Google,13,3
+2026-08-22T18:51:42Z,rolling_14d,3,linkedin.com,1,1
+2026-08-22T18:51:42Z,rolling_14d,4,search.brave.com,1,1
+2026-08-22T18:51:42Z,rolling_14d,5,vuink.com,1,1
