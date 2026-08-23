@@ -13,17 +13,17 @@
 <line x1="72" x2="1075" y1="58.0" y2="58.0" stroke="#21262d"/>
 <text x="64" y="62.0" text-anchor="end" fill="#8b949e" font-family="system-ui,sans-serif" font-size="11">67</text>
 <text x="72.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-29</text>
-<text x="197.4" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-01</text>
-<text x="364.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-05</text>
-<text x="489.9" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-08</text>
-<text x="657.1" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-12</text>
-<text x="782.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-15</text>
-<text x="949.6" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-19</text>
-<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-22</text>
-<polyline points="72.0,263.0 113.8,266.2 155.6,263.0 197.4,217.4 239.2,217.4 281.0,246.7 322.8,240.2 364.5,259.7 406.3,250.0 448.1,253.2 489.9,269.5 531.7,259.7 573.5,223.9 615.3,74.1 657.1,165.3 698.9,227.2 740.7,230.4 782.5,246.7 824.2,253.2 866.0,253.2 907.8,214.1 949.6,259.7 991.4,266.2 1033.2,272.7" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="232.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-02</text>
+<text x="352.8" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-05</text>
+<text x="513.3" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-09</text>
+<text x="633.7" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-12</text>
+<text x="794.2" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-16</text>
+<text x="914.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-19</text>
+<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-23</text>
+<polyline points="72.0,263.0 112.1,266.2 152.2,263.0 192.4,217.4 232.5,217.4 272.6,246.7 312.7,240.2 352.8,259.7 393.0,250.0 433.1,253.2 473.2,269.5 513.3,259.7 553.4,223.9 593.6,74.1 633.7,165.3 673.8,227.2 713.9,230.4 754.0,246.7 794.2,253.2 834.3,253.2 874.4,214.1 914.5,259.7 954.6,266.2 994.8,272.7" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="72" x2="96" y1="322" y2="322" stroke="#2f81f7" stroke-width="3"/>
 <text x="102" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Views</text>
-<polyline points="72.0,266.2 113.8,276.0 155.6,276.0 197.4,259.7 239.2,259.7 281.0,272.7 322.8,272.7 364.5,272.7 406.3,269.5 448.1,269.5 489.9,276.0 531.7,269.5 573.5,272.7 615.3,207.6 657.1,171.8 698.9,181.6 740.7,188.1 782.5,259.7 824.2,246.7 866.0,175.1 907.8,191.4 949.6,259.7 991.4,233.7 1033.2,256.5" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="72.0,266.2 112.1,276.0 152.2,276.0 192.4,259.7 232.5,259.7 272.6,272.7 312.7,272.7 352.8,272.7 393.0,269.5 433.1,269.5 473.2,276.0 513.3,269.5 553.4,272.7 593.6,207.6 633.7,171.8 673.8,181.6 713.9,188.1 754.0,259.7 794.2,246.7 834.3,175.1 874.4,191.4 914.5,259.7 954.6,233.7 994.8,256.5" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="277" x2="301" y1="322" y2="322" stroke="#3fb950" stroke-width="3"/>
 <text x="307" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Clones</text>
 </svg>
