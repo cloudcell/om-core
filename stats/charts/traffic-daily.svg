@@ -20,10 +20,10 @@
 <text x="805.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-17</text>
 <text x="920.7" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-20</text>
 <text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-24</text>
-<polyline points="72.0,263.0 110.6,266.2 149.2,263.0 187.7,217.4 226.3,217.4 264.9,246.7 303.5,240.2 342.0,259.7 380.6,250.0 419.2,253.2 457.8,269.5 496.3,259.7 534.9,223.9 573.5,74.1 612.1,165.3 650.7,227.2 689.2,230.4 727.8,246.7 766.4,253.2 805.0,253.2 843.5,214.1 882.1,259.7 920.7,266.2 959.3,272.7 997.8,266.2" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="72.0,263.0 110.6,266.2 149.2,263.0 187.7,217.4 226.3,217.4 264.9,246.7 303.5,240.2 342.0,259.7 380.6,250.0 419.2,253.2 457.8,269.5 496.3,259.7 534.9,223.9 573.5,74.1 612.1,165.3 650.7,227.2 689.2,230.4 727.8,246.7 766.4,253.2 805.0,253.2 843.5,214.1 882.1,259.7 920.7,266.2 959.3,272.7 997.8,266.2 1036.4,269.5" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="72" x2="96" y1="322" y2="322" stroke="#2f81f7" stroke-width="3"/>
 <text x="102" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Views</text>
-<polyline points="72.0,266.2 110.6,276.0 149.2,276.0 187.7,259.7 226.3,259.7 264.9,272.7 303.5,272.7 342.0,272.7 380.6,269.5 419.2,269.5 457.8,276.0 496.3,269.5 534.9,272.7 573.5,207.6 612.1,171.8 650.7,181.6 689.2,188.1 727.8,259.7 766.4,246.7 805.0,175.1 843.5,191.4 882.1,259.7 920.7,233.7 959.3,256.5 997.8,145.8" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="72.0,266.2 110.6,276.0 149.2,276.0 187.7,259.7 226.3,259.7 264.9,272.7 303.5,272.7 342.0,272.7 380.6,269.5 419.2,269.5 457.8,276.0 496.3,269.5 534.9,272.7 573.5,207.6 612.1,171.8 650.7,181.6 689.2,188.1 727.8,259.7 766.4,246.7 805.0,175.1 843.5,191.4 882.1,259.7 920.7,233.7 959.3,256.5 997.8,145.8 1036.4,253.2" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="277" x2="301" y1="322" y2="322" stroke="#3fb950" stroke-width="3"/>
 <text x="307" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Clones</text>
 </svg>
