@@ -4,24 +4,24 @@
 <text x="25" y="48" fill="#8b949e" font-family="system-ui,sans-serif" font-size="12">GitHub rolling 14-day top 10 · visits and unique visitors</text>
 <text x="198" y="84" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">github.com</text>
 <rect x="210" y="69" width="850.0" height="10" rx="2" fill="#2f81f7"/>
-<rect x="210" y="82" width="111.8" height="7" rx="2" fill="#3fb950"/>
-<text x="1068.0" y="78" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">38</text>
-<text x="329.8" y="89" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">5</text>
+<rect x="210" y="82" width="141.7" height="7" rx="2" fill="#3fb950"/>
+<text x="1068.0" y="78" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">24</text>
+<text x="359.7" y="89" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">4</text>
 <text x="198" y="118" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">Google</text>
-<rect x="210" y="103" width="290.8" height="10" rx="2" fill="#2f81f7"/>
-<rect x="210" y="116" width="67.1" height="7" rx="2" fill="#3fb950"/>
-<text x="508.8" y="112" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">13</text>
-<text x="285.1" y="123" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">3</text>
+<rect x="210" y="103" width="354.2" height="10" rx="2" fill="#2f81f7"/>
+<rect x="210" y="116" width="35.4" height="7" rx="2" fill="#3fb950"/>
+<text x="572.2" y="112" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">10</text>
+<text x="253.4" y="123" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
 <text x="198" y="152" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">search.brave.com</text>
-<rect x="210" y="137" width="22.4" height="10" rx="2" fill="#2f81f7"/>
-<rect x="210" y="150" width="22.4" height="7" rx="2" fill="#3fb950"/>
-<text x="240.4" y="146" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
-<text x="240.4" y="157" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
+<rect x="210" y="137" width="35.4" height="10" rx="2" fill="#2f81f7"/>
+<rect x="210" y="150" width="35.4" height="7" rx="2" fill="#3fb950"/>
+<text x="253.4" y="146" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
+<text x="253.4" y="157" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
 <text x="198" y="186" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">vuink.com</text>
-<rect x="210" y="171" width="22.4" height="10" rx="2" fill="#2f81f7"/>
-<rect x="210" y="184" width="22.4" height="7" rx="2" fill="#3fb950"/>
-<text x="240.4" y="180" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
-<text x="240.4" y="191" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
+<rect x="210" y="171" width="35.4" height="10" rx="2" fill="#2f81f7"/>
+<rect x="210" y="184" width="35.4" height="7" rx="2" fill="#3fb950"/>
+<text x="253.4" y="180" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
+<text x="253.4" y="191" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
 <rect x="210" y="224" width="18" height="7" rx="2" fill="#2f81f7"/>
 <text x="235" y="232" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="10">Visits</text>
 <rect x="300" y="224" width="18" height="7" rx="2" fill="#3fb950"/>
