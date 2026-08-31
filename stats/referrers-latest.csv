@@ -1,5 +1,4 @@
 observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
-2026-08-31T05:44:22Z,rolling_14d,1,Google,10,1
-2026-08-31T05:44:22Z,rolling_14d,2,github.com,9,3
-2026-08-31T05:44:22Z,rolling_14d,3,search.brave.com,1,1
-2026-08-31T05:44:22Z,rolling_14d,4,vuink.com,1,1
+2026-08-31T14:02:14Z,rolling_14d,1,Google,10,1
+2026-08-31T14:02:14Z,rolling_14d,2,github.com,8,3
+2026-08-31T14:02:14Z,rolling_14d,3,search.brave.com,1,1
