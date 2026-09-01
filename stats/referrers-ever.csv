@@ -1,8 +1,8 @@
 referrer,first_seen_utc,last_seen_utc,observations,latest_14d_visits,latest_14d_unique_visitors,max_observed_14d_visits,max_observed_14d_unique_visitors,currently_in_top_10
 Bing,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,1,1,1,1,false
-github.com,2026-08-12T07:04:15Z,2026-09-01T11:45:39Z,76,8,3,95,9,true
-Google,2026-08-12T07:04:15Z,2026-09-01T11:45:39Z,76,10,1,14,4,true
+github.com,2026-08-12T07:04:15Z,2026-09-01T16:43:46Z,77,8,3,95,9,true
+Google,2026-08-12T07:04:15Z,2026-09-01T16:43:46Z,77,10,1,14,4,true
 linkedin.com,2026-08-12T07:04:15Z,2026-08-24T07:31:53Z,50,1,1,5,5,false
 news.ycombinator.com,2026-08-12T07:04:15Z,2026-08-21T07:10:59Z,38,1,1,1,1,false
-search.brave.com,2026-08-20T13:14:52Z,2026-09-01T11:45:39Z,42,1,1,1,1,true
+search.brave.com,2026-08-20T13:14:52Z,2026-09-01T16:43:46Z,43,1,1,1,1,true
 vuink.com,2026-08-18T13:11:47Z,2026-08-31T05:44:22Z,46,1,1,1,1,false
