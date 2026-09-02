@@ -348,3 +348,5 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-09-02T04:42:58Z,rolling_14d,3,search.brave.com,1,1
 2026-09-02T11:26:25Z,rolling_14d,1,github.com,6,3
 2026-09-02T11:26:25Z,rolling_14d,2,search.brave.com,1,1
+2026-09-02T16:39:53Z,rolling_14d,1,github.com,6,3
+2026-09-02T16:39:53Z,rolling_14d,2,search.brave.com,1,1
