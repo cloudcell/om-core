@@ -13,17 +13,17 @@
 <line x1="72" x2="1075" y1="58.0" y2="58.0" stroke="#21262d"/>
 <text x="64" y="62.0" text-anchor="end" fill="#8b949e" font-family="system-ui,sans-serif" font-size="11">1,078</text>
 <text x="72.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-29</text>
-<text x="205.7" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-04</text>
-<text x="361.8" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-11</text>
-<text x="495.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-17</text>
-<text x="651.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-24</text>
-<text x="785.2" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-30</text>
-<text x="941.3" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-06</text>
-<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-12</text>
-<polyline points="72.0,275.2 94.3,274.6 116.6,273.8 138.9,270.1 161.2,266.5 183.4,264.7 205.7,262.4 228.0,261.4 250.3,259.8 272.6,258.4 294.9,258.0 317.2,257.0 339.5,253.8 361.8,241.2 384.0,234.3 406.3,231.3 428.6,228.5 450.9,226.6 473.2,225.2 495.5,223.8 517.8,220.0 540.1,219.0 562.4,218.4 584.6,218.2 606.9,217.5 629.2,217.1 651.5,216.7 673.8,216.1 696.1,215.9 718.4,215.5 740.7,215.5 763.0,215.1 785.2,215.1 807.5,214.5 829.8,214.3 852.1,214.1 874.4,213.9 896.7,213.3 919.0,211.9 941.3,210.9 963.6,205.6 985.8,203.6 1008.1,203.4 1030.4,203.0 1052.7,201.8 1075.0,201.8" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="224.6" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-05</text>
+<text x="355.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-11</text>
+<text x="508.1" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-18</text>
+<text x="638.9" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-24</text>
+<text x="791.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-31</text>
+<text x="922.4" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-06</text>
+<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-13</text>
+<polyline points="72.0,275.2 93.8,274.6 115.6,273.8 137.4,270.1 159.2,266.5 181.0,264.7 202.8,262.4 224.6,261.4 246.4,259.8 268.2,258.4 290.0,258.0 311.8,257.0 333.7,253.8 355.5,241.2 377.3,234.3 399.1,231.3 420.9,228.5 442.7,226.6 464.5,225.2 486.3,223.8 508.1,220.0 529.9,219.0 551.7,218.4 573.5,218.2 595.3,217.5 617.1,217.1 638.9,216.7 660.7,216.1 682.5,215.9 704.3,215.5 726.1,215.5 747.9,215.1 769.7,215.1 791.5,214.5 813.3,214.3 835.2,214.1 857.0,213.9 878.8,213.3 900.6,211.9 922.4,210.9 944.2,205.6 966.0,203.6 987.8,203.4 1009.6,203.0 1031.4,201.8 1053.2,201.8 1075.0,201.8" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="72" x2="96" y1="322" y2="322" stroke="#2f81f7" stroke-width="3"/>
 <text x="102" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Views</text>
-<polyline points="72.0,275.4 94.3,275.4 116.6,275.4 138.9,274.4 161.2,273.4 183.4,273.2 205.7,273.0 228.0,272.8 250.3,272.4 272.6,272.0 294.9,272.0 317.2,271.6 339.5,271.3 361.8,267.1 384.0,260.6 406.3,254.8 428.6,249.3 450.9,248.3 473.2,246.5 495.5,240.2 517.8,234.9 540.1,233.9 562.4,231.3 584.6,230.1 606.9,222.0 629.2,220.6 651.5,217.5 673.8,214.3 696.1,210.1 718.4,209.7 740.7,187.0 763.0,185.8 785.2,181.3 807.5,97.6 829.8,95.8 852.1,94.6 874.4,93.6 896.7,92.6 919.0,90.7 941.3,89.9 963.6,87.3 985.8,83.7 1008.1,81.0 1030.4,78.6 1052.7,74.1 1075.0,74.1" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<polyline points="72.0,275.4 93.8,275.4 115.6,275.4 137.4,274.4 159.2,273.4 181.0,273.2 202.8,273.0 224.6,272.8 246.4,272.4 268.2,272.0 290.0,272.0 311.8,271.6 333.7,271.3 355.5,267.1 377.3,260.6 399.1,254.8 420.9,249.3 442.7,248.3 464.5,246.5 486.3,240.2 508.1,234.9 529.9,233.9 551.7,231.3 573.5,230.1 595.3,222.0 617.1,220.6 638.9,217.5 660.7,214.3 682.5,210.1 704.3,209.7 726.1,187.0 747.9,185.8 769.7,181.3 791.5,97.6 813.3,95.8 835.2,94.6 857.0,93.6 878.8,92.6 900.6,90.7 922.4,89.9 944.2,87.3 966.0,83.7 987.8,81.0 1009.6,78.6 1031.4,74.1 1053.2,74.1 1075.0,74.1" fill="none" stroke="#3fb950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="277" x2="301" y1="322" y2="322" stroke="#3fb950" stroke-width="3"/>
 <text x="307" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Clones</text>
 </svg>
