@@ -13,14 +13,14 @@
 <line x1="72" x2="1075" y1="58.0" y2="58.0" stroke="#21262d"/>
 <text x="64" y="62.0" text-anchor="end" fill="#8b949e" font-family="system-ui,sans-serif" font-size="11">18</text>
 <text x="72.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-06-29</text>
-<text x="217.2" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-10</text>
-<text x="362.3" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-21</text>
-<text x="507.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-01</text>
-<text x="639.5" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-11</text>
-<text x="784.7" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-22</text>
-<text x="929.8" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-02</text>
-<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-13</text>
-<polyline points="85.2,252.3 98.4,228.5 111.6,228.5 124.8,121.6 138.0,121.6 151.2,109.8 164.4,109.8 177.6,109.8 190.8,97.9 204.0,86.0 217.2,86.0 230.4,86.0 243.6,86.0 256.8,86.0 270.0,74.1 283.2,74.1 296.4,74.1 309.6,74.1 322.8,74.1 335.9,74.1 349.1,74.1 362.3,74.1 375.5,74.1 388.7,74.1 401.9,74.1 415.1,74.1 428.3,74.1 441.5,74.1 454.7,74.1 467.9,74.1 481.1,74.1 494.3,74.1 507.5,74.1 520.7,74.1 533.9,74.1 547.1,74.1 560.3,74.1 573.5,74.1 586.7,74.1 599.9,74.1 613.1,74.1 626.3,74.1 639.5,74.1 652.7,74.1 665.9,74.1 679.1,74.1 692.3,74.1 705.5,74.1 718.7,74.1 731.9,74.1 745.1,74.1 758.3,74.1 771.5,74.1 784.7,74.1 797.9,74.1 811.1,74.1 824.2,74.1 837.4,74.1 850.6,74.1 863.8,74.1 877.0,74.1 890.2,74.1 903.4,74.1 916.6,74.1 929.8,74.1 943.0,74.1 956.2,74.1 969.4,74.1 982.6,74.1 995.8,74.1 1009.0,74.1 1022.2,74.1 1035.4,74.1 1048.6,74.1 1061.8,74.1 1075.0,74.1" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="215.3" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-10</text>
+<text x="358.6" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-07-21</text>
+<text x="501.9" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-01</text>
+<text x="645.1" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-12</text>
+<text x="788.4" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-08-23</text>
+<text x="931.7" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-03</text>
+<text x="1075.0" y="306" text-anchor="middle" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2026-09-14</text>
+<polyline points="85.0,252.3 98.1,228.5 111.1,228.5 124.1,121.6 137.1,121.6 150.2,109.8 163.2,109.8 176.2,109.8 189.2,97.9 202.3,86.0 215.3,86.0 228.3,86.0 241.3,86.0 254.4,86.0 267.4,74.1 280.4,74.1 293.4,74.1 306.5,74.1 319.5,74.1 332.5,74.1 345.5,74.1 358.6,74.1 371.6,74.1 384.6,74.1 397.6,74.1 410.7,74.1 423.7,74.1 436.7,74.1 449.8,74.1 462.8,74.1 475.8,74.1 488.8,74.1 501.9,74.1 514.9,74.1 527.9,74.1 540.9,74.1 554.0,74.1 567.0,74.1 580.0,74.1 593.0,74.1 606.1,74.1 619.1,74.1 632.1,74.1 645.1,74.1 658.2,74.1 671.2,74.1 684.2,74.1 697.2,74.1 710.3,74.1 723.3,74.1 736.3,74.1 749.4,74.1 762.4,74.1 775.4,74.1 788.4,74.1 801.5,74.1 814.5,74.1 827.5,74.1 840.5,74.1 853.6,74.1 866.6,74.1 879.6,74.1 892.6,74.1 905.7,74.1 918.7,74.1 931.7,74.1 944.7,74.1 957.8,74.1 970.8,74.1 983.8,74.1 996.8,74.1 1009.9,74.1 1022.9,74.1 1035.9,74.1 1048.9,74.1 1062.0,74.1 1075.0,74.1" fill="none" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 <line x1="72" x2="96" y1="322" y2="322" stroke="#2f81f7" stroke-width="3"/>
 <text x="102" y="326" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="11">Stars</text>
 </svg>
