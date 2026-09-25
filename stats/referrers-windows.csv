@@ -599,3 +599,8 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-09-24T21:35:12Z,rolling_14d,3,Google,3,3
 2026-09-24T21:35:12Z,rolling_14d,4,DuckDuckGo,1,1
 2026-09-24T21:35:12Z,rolling_14d,5,news.ycombinator.com,1,1
+2026-09-25T05:04:16Z,rolling_14d,1,core.cloudcell.workers.dev,10,2
+2026-09-25T05:04:16Z,rolling_14d,2,github.com,9,2
+2026-09-25T05:04:16Z,rolling_14d,3,Google,3,3
+2026-09-25T05:04:16Z,rolling_14d,4,DuckDuckGo,1,1
+2026-09-25T05:04:16Z,rolling_14d,5,news.ycombinator.com,1,1
