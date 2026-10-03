@@ -7,12 +7,12 @@
 <rect x="210" y="82" width="182.1" height="7" rx="2" fill="#3fb950"/>
 <text x="1068.0" y="78" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">14</text>
 <text x="400.1" y="89" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">3</text>
-<text x="198" y="118" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">news.ycombinator.com</text>
-<rect x="210" y="103" width="182.1" height="10" rx="2" fill="#2f81f7"/>
-<rect x="210" y="116" width="182.1" height="7" rx="2" fill="#3fb950"/>
-<text x="400.1" y="112" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">3</text>
-<text x="400.1" y="123" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">3</text>
-<text x="198" y="152" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">Google</text>
+<text x="198" y="118" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">Google</text>
+<rect x="210" y="103" width="121.4" height="10" rx="2" fill="#2f81f7"/>
+<rect x="210" y="116" width="121.4" height="7" rx="2" fill="#3fb950"/>
+<text x="339.4" y="112" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2</text>
+<text x="339.4" y="123" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2</text>
+<text x="198" y="152" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">news.ycombinator.com</text>
 <rect x="210" y="137" width="121.4" height="10" rx="2" fill="#2f81f7"/>
 <rect x="210" y="150" width="121.4" height="7" rx="2" fill="#3fb950"/>
 <text x="339.4" y="146" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2</text>
