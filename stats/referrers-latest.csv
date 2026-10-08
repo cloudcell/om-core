@@ -1,7 +1,7 @@
 observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
-2026-10-08T06:15:12Z,rolling_14d,1,github.com,6,2
-2026-10-08T06:15:12Z,rolling_14d,2,news.ycombinator.com,2,2
-2026-10-08T06:15:12Z,rolling_14d,3,Google,1,1
-2026-10-08T06:15:12Z,rolling_14d,4,core.cloudcell.workers.dev,1,1
-2026-10-08T06:15:12Z,rolling_14d,5,kaiyuanbang.cn,1,1
-2026-10-08T06:15:12Z,rolling_14d,6,linkedin.com,1,1
+2026-10-08T13:43:10Z,rolling_14d,1,github.com,6,2
+2026-10-08T13:43:10Z,rolling_14d,2,news.ycombinator.com,2,2
+2026-10-08T13:43:10Z,rolling_14d,3,Google,1,1
+2026-10-08T13:43:10Z,rolling_14d,4,core.cloudcell.workers.dev,1,1
+2026-10-08T13:43:10Z,rolling_14d,5,kaiyuanbang.cn,1,1
+2026-10-08T13:43:10Z,rolling_14d,6,linkedin.com,1,1
