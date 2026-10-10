@@ -1,11 +1,11 @@
 referrer,first_seen_utc,last_seen_utc,observations,latest_14d_visits,latest_14d_unique_visitors,max_observed_14d_visits,max_observed_14d_unique_visitors,currently_in_top_10
 Bing,2026-08-12T07:04:15Z,2026-08-14T07:54:03Z,10,1,1,1,1,false
-core.cloudcell.workers.dev,2026-09-14T12:58:53Z,2026-10-09T18:24:10Z,65,1,1,10,2,true
+core.cloudcell.workers.dev,2026-09-14T12:58:53Z,2026-10-10T06:00:31Z,66,1,1,10,2,true
 DuckDuckGo,2026-09-13T11:59:39Z,2026-09-29T13:02:22Z,62,1,1,1,1,false
-github.com,2026-08-12T07:04:15Z,2026-10-09T18:24:10Z,214,5,2,95,9,true
-Google,2026-08-12T07:04:15Z,2026-10-09T18:24:10Z,179,1,1,14,4,true
-kaiyuanbang.cn,2026-10-04T12:29:59Z,2026-10-09T18:24:10Z,15,1,1,1,1,true
-linkedin.com,2026-08-12T07:04:15Z,2026-10-09T18:24:10Z,72,1,1,5,5,true
-news.ycombinator.com,2026-08-12T07:04:15Z,2026-10-09T18:24:10Z,107,2,2,3,3,true
+github.com,2026-08-12T07:04:15Z,2026-10-10T06:00:31Z,215,5,2,95,9,true
+Google,2026-08-12T07:04:15Z,2026-10-10T06:00:31Z,180,1,1,14,4,true
+kaiyuanbang.cn,2026-10-04T12:29:59Z,2026-10-10T06:00:31Z,16,1,1,1,1,true
+linkedin.com,2026-08-12T07:04:15Z,2026-10-10T06:00:31Z,73,1,1,5,5,true
+news.ycombinator.com,2026-08-12T07:04:15Z,2026-10-10T06:00:31Z,108,2,2,3,3,true
 search.brave.com,2026-08-20T13:14:52Z,2026-09-03T04:39:11Z,49,1,1,1,1,false
 vuink.com,2026-08-18T13:11:47Z,2026-08-31T05:44:22Z,46,1,1,1,1,false
