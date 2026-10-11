@@ -847,3 +847,8 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-10-11T13:02:19Z,rolling_14d,3,core.cloudcell.workers.dev,1,1
 2026-10-11T13:02:19Z,rolling_14d,4,kaiyuanbang.cn,1,1
 2026-10-11T13:02:19Z,rolling_14d,5,linkedin.com,1,1
+2026-10-11T22:05:20Z,rolling_14d,1,github.com,3,2
+2026-10-11T22:05:20Z,rolling_14d,2,Google,1,1
+2026-10-11T22:05:20Z,rolling_14d,3,core.cloudcell.workers.dev,1,1
+2026-10-11T22:05:20Z,rolling_14d,4,kaiyuanbang.cn,1,1
+2026-10-11T22:05:20Z,rolling_14d,5,linkedin.com,1,1
