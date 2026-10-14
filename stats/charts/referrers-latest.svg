@@ -4,14 +4,14 @@
 <text x="25" y="48" fill="#8b949e" font-family="system-ui,sans-serif" font-size="12">GitHub rolling 14-day top 10 · visits and unique visitors</text>
 <text x="198" y="84" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">github.com</text>
 <rect x="210" y="69" width="850.0" height="10" rx="2" fill="#2f81f7"/>
-<rect x="210" y="82" width="425.0" height="7" rx="2" fill="#3fb950"/>
+<rect x="210" y="82" width="637.5" height="7" rx="2" fill="#3fb950"/>
 <text x="1068.0" y="78" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">4</text>
-<text x="643.0" y="89" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2</text>
+<text x="855.5" y="89" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">3</text>
 <text x="198" y="118" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">Google</text>
-<rect x="210" y="103" width="212.5" height="10" rx="2" fill="#2f81f7"/>
-<rect x="210" y="116" width="212.5" height="7" rx="2" fill="#3fb950"/>
-<text x="430.5" y="112" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
-<text x="430.5" y="123" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">1</text>
+<rect x="210" y="103" width="425.0" height="10" rx="2" fill="#2f81f7"/>
+<rect x="210" y="116" width="425.0" height="7" rx="2" fill="#3fb950"/>
+<text x="643.0" y="112" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2</text>
+<text x="643.0" y="123" fill="#8b949e" font-family="system-ui,sans-serif" font-size="10">2</text>
 <text x="198" y="152" text-anchor="end" fill="#c9d1d9" font-family="system-ui,sans-serif" font-size="12">core.cloudcell.workers.dev</text>
 <rect x="210" y="137" width="212.5" height="10" rx="2" fill="#2f81f7"/>
 <rect x="210" y="150" width="212.5" height="7" rx="2" fill="#3fb950"/>
