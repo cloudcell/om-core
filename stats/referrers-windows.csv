@@ -915,3 +915,9 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-10-15T11:39:50Z,rolling_14d,4,kaiyuanbang.cn,1,1
 2026-10-15T11:39:50Z,rolling_14d,5,linkedin.com,1,1
 2026-10-15T11:39:50Z,rolling_14d,6,t.co,1,1
+2026-10-15T17:07:56Z,rolling_14d,1,github.com,4,3
+2026-10-15T17:07:56Z,rolling_14d,2,Google,2,2
+2026-10-15T17:07:56Z,rolling_14d,3,core.cloudcell.workers.dev,1,1
+2026-10-15T17:07:56Z,rolling_14d,4,kaiyuanbang.cn,1,1
+2026-10-15T17:07:56Z,rolling_14d,5,linkedin.com,1,1
+2026-10-15T17:07:56Z,rolling_14d,6,t.co,1,1
