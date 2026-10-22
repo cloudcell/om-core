@@ -1,5 +1,5 @@
 observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
-2026-10-21T21:48:10Z,rolling_14d,1,github.com,6,4
-2026-10-21T21:48:10Z,rolling_14d,2,Google,2,2
-2026-10-21T21:48:10Z,rolling_14d,3,core.cloudcell.workers.dev,1,1
-2026-10-21T21:48:10Z,rolling_14d,4,t.co,1,1
+2026-10-22T04:59:22Z,rolling_14d,1,github.com,6,4
+2026-10-22T04:59:22Z,rolling_14d,2,Google,2,2
+2026-10-22T04:59:22Z,rolling_14d,3,core.cloudcell.workers.dev,1,1
+2026-10-22T04:59:22Z,rolling_14d,4,t.co,1,1
