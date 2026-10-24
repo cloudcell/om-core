@@ -1054,3 +1054,6 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-10-23T21:29:09Z,rolling_14d,1,github.com,7,5
 2026-10-23T21:29:09Z,rolling_14d,2,Google,4,4
 2026-10-23T21:29:09Z,rolling_14d,3,t.co,1,1
+2026-10-24T04:45:34Z,rolling_14d,1,github.com,7,5
+2026-10-24T04:45:34Z,rolling_14d,2,Google,4,4
+2026-10-24T04:45:34Z,rolling_14d,3,t.co,1,1
