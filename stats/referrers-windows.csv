@@ -1073,3 +1073,7 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-10-25T04:52:32Z,rolling_14d,2,Google,3,3
 2026-10-25T04:52:32Z,rolling_14d,3,cloudcell.github.io,1,1
 2026-10-25T04:52:32Z,rolling_14d,4,t.co,1,1
+2026-10-25T11:42:50Z,rolling_14d,1,github.com,8,7
+2026-10-25T11:42:50Z,rolling_14d,2,Google,3,3
+2026-10-25T11:42:50Z,rolling_14d,3,cloudcell.github.io,1,1
+2026-10-25T11:42:50Z,rolling_14d,4,t.co,1,1
