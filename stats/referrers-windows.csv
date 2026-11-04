@@ -1200,3 +1200,9 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-11-03T19:33:59Z,rolling_14d,4,linkedin.com,3,1
 2026-11-03T19:33:59Z,rolling_14d,5,DuckDuckGo,1,1
 2026-11-03T19:33:59Z,rolling_14d,6,cloudcell.github.io,1,1
+2026-11-04T06:37:56Z,rolling_14d,1,github.com,9,6
+2026-11-04T06:37:56Z,rolling_14d,2,Google,5,5
+2026-11-04T06:37:56Z,rolling_14d,3,aocr.org,5,5
+2026-11-04T06:37:56Z,rolling_14d,4,linkedin.com,3,1
+2026-11-04T06:37:56Z,rolling_14d,5,DuckDuckGo,1,1
+2026-11-04T06:37:56Z,rolling_14d,6,cloudcell.github.io,1,1
