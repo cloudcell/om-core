@@ -1307,3 +1307,8 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-11-12T07:21:36Z,rolling_14d,3,Google,3,3
 2026-11-12T07:21:36Z,rolling_14d,4,linkedin.com,3,1
 2026-11-12T07:21:36Z,rolling_14d,5,t.co,1,1
+2026-11-12T20:03:31Z,rolling_14d,1,aocr.org,37,37
+2026-11-12T20:03:31Z,rolling_14d,2,github.com,13,3
+2026-11-12T20:03:31Z,rolling_14d,3,Google,4,4
+2026-11-12T20:03:31Z,rolling_14d,4,linkedin.com,3,1
+2026-11-12T20:03:31Z,rolling_14d,5,t.co,1,1
