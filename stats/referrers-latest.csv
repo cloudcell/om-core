@@ -1,7 +1,6 @@
 observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
-2026-11-19T20:45:49Z,rolling_14d,1,aocr.org,35,35
-2026-11-19T20:45:49Z,rolling_14d,2,github.com,20,6
-2026-11-19T20:45:49Z,rolling_14d,3,Google,4,4
-2026-11-19T20:45:49Z,rolling_14d,4,cloudcell.nz,2,1
-2026-11-19T20:45:49Z,rolling_14d,5,t.co,1,1
-2026-11-19T20:45:49Z,rolling_14d,6,teams.public.onecdn.static.microsoft,1,1
+2026-11-20T07:26:41Z,rolling_14d,1,github.com,21,6
+2026-11-20T07:26:41Z,rolling_14d,2,Google,4,4
+2026-11-20T07:26:41Z,rolling_14d,3,cloudcell.nz,2,1
+2026-11-20T07:26:41Z,rolling_14d,4,t.co,1,1
+2026-11-20T07:26:41Z,rolling_14d,5,teams.public.onecdn.static.microsoft,1,1
