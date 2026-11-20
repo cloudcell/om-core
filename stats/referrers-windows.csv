@@ -1394,3 +1394,8 @@ observed_at_utc,window,rank,referrer,visits_14d,unique_visitors_14d
 2026-11-20T07:26:41Z,rolling_14d,3,cloudcell.nz,2,1
 2026-11-20T07:26:41Z,rolling_14d,4,t.co,1,1
 2026-11-20T07:26:41Z,rolling_14d,5,teams.public.onecdn.static.microsoft,1,1
+2026-11-20T20:29:17Z,rolling_14d,1,github.com,21,6
+2026-11-20T20:29:17Z,rolling_14d,2,Google,4,4
+2026-11-20T20:29:17Z,rolling_14d,3,cloudcell.nz,2,1
+2026-11-20T20:29:17Z,rolling_14d,4,t.co,1,1
+2026-11-20T20:29:17Z,rolling_14d,5,teams.public.onecdn.static.microsoft,1,1
