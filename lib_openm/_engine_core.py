@@ -3007,11 +3007,16 @@ class _EngineCore:
                     expression = self._normalize_expression(rule.expression)
                 elif curr_cube.get(curr_addr) is None:
                     source = "empty"
+            if curr_cube.is_user_override(curr_addr):
+                # A hard value wins over any dormant rule — same taxonomy as
+                # resolve_cell_meta. The expression is kept for display but its
+                # precedents never ran, so they are not expanded below.
+                source = "override"
 
             precedents: list[str] = []
             precedent_targets: list[dict[str, Any]] = []
             seen_precedent_labels: set[str] = set()
-            if expression is not None and depth < max_depth:
+            if expression is not None and depth < max_depth and source != "override":
                 refs = self._extract_trace_refs(expression)
                 # Normalize address for correct dimension slot indexing
                 norm_curr_addr = _normalize_addr_for_cube(curr_cube, curr_addr)
@@ -3163,6 +3168,10 @@ class _EngineCore:
                     expression = self._normalize_expression(rule.expression)
                 elif curr_cube.get(curr_addr) is None:
                     source = "empty"
+            if curr_cube.is_user_override(curr_addr):
+                # A hard value wins over any dormant rule — an override cannot
+                # take part in a cycle, so its precedents are not expanded.
+                source = "override"
 
             node_meta[key] = {
                 "cube_id": curr_cube.id,
@@ -3174,7 +3183,7 @@ class _EngineCore:
             }
             adjacency.setdefault(key, [])
 
-            if depth >= max_depth:
+            if depth >= max_depth or source == "override":
                 continue
 
             next_nodes: list[tuple[str, tuple[str, ...]]] = []
