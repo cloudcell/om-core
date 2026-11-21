@@ -424,14 +424,19 @@ class REPLModelMixin:
         Usage:
           view <name>                                      Activate existing view
           view <name> = <cube>                             Create default view
-          view <name> = <cube>::<row_dim>[:<col_dim>]      Create simple 2D view
+          view <name> = <cube>::<seg>[:<seg> ...]          Create view from segments
           view <name> = <cube> rows: <dims...> cols: <dims...> page: <dims...>
           view create <name> = <spec>                      Create a view
           view rename <old_name> <new_name>                Rename a view
           view delete <name>                               Delete a view
 
+        Shorthand segments after '::' are ':'-separated:
+          Dim or Dim.*   axis dim — in written order: rows, cols, then page
+          Dim.Item       page dim pinned to that item
+
         Examples:
           view V = Sales::Region:Product
+          view M = Economy::Country.US:Scenario.Baseline:Year.*:Metric.*
           view PnL = Sales rows: Account cols: Month page: Scenario Version
           view create V = Sales::Region:Product
           view rename V V2
@@ -529,7 +534,7 @@ class REPLModelMixin:
 
     def help_view(self: OpenMREPLCore):
         print("\nview <name>")
-        print("view <name> = <cube>::<row>[:<col>]")
+        print("view <name> = <cube>::<seg>[:<seg> ...]   # Dim/Dim.* = axis (rows, cols, page); Dim.Item = page pin")
         print("view <name> = <cube> rows: ... cols: ... page: ...")
         print("view create <name> = <spec>")
         print("view rename <old_name> <new_name>")
@@ -545,19 +550,22 @@ class REPLModelMixin:
                     return d.get("id")
             return None
 
+        def _resolve_item_id(dims: list[dict], dim_id: str, item_name: str) -> str | None:
+            for d in dims:
+                if d.get("id") == dim_id:
+                    for it in d.get("item_list", []):
+                        if it.get("name") == item_name or it.get("id") == item_name:
+                            return it.get("id")
+            return None
+
         try:
             if '::' in spec:
-                # Shorthand path: Cube::RowDim[:ColDim]
+                # Shorthand path: Cube::Seg[:Seg ...]
+                # Each segment is Dim / Dim.*  -> axis dim (in order: rows, cols, page)
+                # or Dim.Item                  -> page dim pinned to that item.
                 cube_part, dims_part = spec.split('::', 1)
                 cube_name = cube_part.strip()
-
-                if ':' in dims_part:
-                    row_dim_name, col_dim_name = dims_part.split(':', 1)
-                    row_dim_name = row_dim_name.strip()
-                    col_dim_name = col_dim_name.strip()
-                else:
-                    row_dim_name = dims_part.strip()
-                    col_dim_name = None
+                segments = [s.strip() for s in dims_part.split(':') if s.strip()]
 
                 cube_data = self.session.query("cube_list")
                 if cube_data is None:
@@ -579,20 +587,46 @@ class REPLModelMixin:
                     return
                 dims = dim_data.get("dimensions", [])
 
-                row_dim_id = _resolve_dim(row_dim_name, dims)
-                if not row_dim_id:
-                    print(f"Error: Dimension not found: {row_dim_name}")
-                    return
-                col_dim_id = _resolve_dim(col_dim_name, dims) if col_dim_name else None
+                axis_dim_ids: list[str] = []
+                page_pins: list[tuple[str, str]] = []
+                for seg in segments:
+                    dim_name, _, item_name = seg.partition('.')
+                    dim_id = _resolve_dim(dim_name.strip(), dims)
+                    if not dim_id:
+                        print(f"Error: Dimension not found: {dim_name.strip()}")
+                        return
+                    item_name = item_name.strip()
+                    if item_name and item_name != '*':
+                        item_id = _resolve_item_id(dims, dim_id, item_name)
+                        if not item_id:
+                            print(f"Error: Item not found: {seg}")
+                            return
+                        page_pins.append((dim_id, item_id))
+                    else:
+                        axis_dim_ids.append(dim_id)
+
+                row_dim_ids = axis_dim_ids[:1]
+                col_dim_ids = axis_dim_ids[1:2]
+                page_dim_ids = [d for d, _ in page_pins] + axis_dim_ids[2:]
 
                 # Create view via session command (works in both local and remote mode)
                 result = self.session.execute(
                     "create_view",
                     name=name,
                     cube_id=cube_id,
-                    row_dims=[row_dim_id],
-                    col_dims=[col_dim_id] if col_dim_id else []
+                    row_dims=row_dim_ids,
+                    col_dims=col_dim_ids,
+                    page_dim_ids=page_dim_ids,
                 )
+                if result.success:
+                    new_view_id = (result.data or {}).get("id")
+                    for dim_id, item_id in page_pins:
+                        self.session.execute(
+                            "set_page_item_id",
+                            view_id=new_view_id,
+                            dim_id=dim_id,
+                            item_id=item_id,
+                        )
             else:
                 # Role-syntax path: Cube rows: A B cols: C page: D
                 cube_name, layout = _parse_role_syntax(spec)

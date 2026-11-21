@@ -25,13 +25,20 @@ DEFAULT_SOCKET_PATH = "/tmp/om-engine.sock"
 
 
 def _resolve_server_bin() -> Path:
-    """Locate the server binary from config or environment."""
+    """Locate the server binary from environment or config.
+
+    OM_ENGINE_SERVER_BIN takes precedence over om-engine.conf so a caller
+    can select e.g. the monolithic om-runtime binary for a single run.
+    """
     from lib_utils.config import engine
 
+    env_bin = os.environ.get("OM_ENGINE_SERVER_BIN")
+    if env_bin:
+        return Path(env_bin)
     server_bin = engine("remote", "server_bin", "")
     if server_bin:
         return Path(server_bin)
-    return Path(os.environ.get("OM_ENGINE_SERVER_BIN", "om-engine-server"))
+    return Path("om-engine-server")
 
 
 class Launcher:

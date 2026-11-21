@@ -28,6 +28,7 @@ _LONG_RUNNING_COMMANDS: frozenset[str] = frozenset({
     "create_new_workspace",
     "replace_workspace",
     "set_cell_hardvalues_batch_by_addr",
+    "create_dimension_items_batch",
 })
 _LONG_RUNNING_TIMEOUT: float = 310.0
 

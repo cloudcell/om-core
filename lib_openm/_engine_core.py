@@ -2620,10 +2620,12 @@ class _EngineCore:
                 parsed = self._parse_cell_node_key(dep_key)
                 if parsed is not None:
                     dep_cube_id, dep_addr = parsed
-                    # Normalize to full address format (with @.value prefix)
                     dep_cube = self._ws.cubes.get(dep_cube_id)
-                    if dep_cube is not None:
-                        dep_addr = _normalize_addr_for_cube(dep_cube, dep_addr)
+                    if dep_cube is None:
+                        # Stale graph node for a deleted cube — not a real dependent.
+                        continue
+                    # Normalize to full address format (with @.value prefix)
+                    dep_addr = _normalize_addr_for_cube(dep_cube, dep_addr)
                     try:
                         label = self._format_addr_label(dep_cube_id, dep_addr)
                     except Exception:
@@ -2667,10 +2669,12 @@ class _EngineCore:
                 parsed = self._parse_cell_node_key(pred_key)
                 if parsed is not None:
                     cid, parsed_addr = parsed
-                    # Normalize to full address format (with @.value prefix)
                     parsed_cube = self._ws.cubes.get(cid)
-                    if parsed_cube is not None:
-                        parsed_addr = _normalize_addr_for_cube(parsed_cube, parsed_addr)
+                    if parsed_cube is None:
+                        # Stale graph node for a deleted cube — not a real precedent.
+                        continue
+                    # Normalize to full address format (with @.value prefix)
+                    parsed_addr = _normalize_addr_for_cube(parsed_cube, parsed_addr)
                     normalized = (cid, parsed_addr)
                     if normalized in seen_cells:
                         continue
@@ -2850,7 +2854,9 @@ class _EngineCore:
         for r in self._ws.rules.values():
             if not r.is_anchored or r.addr_mask is None:
                 continue
-            dep_cube = self.require_cube_by_id(r.cube_id)
+            dep_cube = self.find_cube_by_id(r.cube_id)
+            if dep_cube is None:
+                continue  # rule anchored to a deleted cube — stale workspace state
             expr = self._normalize_expression(r.expression)
             base_addr = r.addr_mask
             if _scan_expression(dep_cube, base_addr, expr, label_cube=dep_cube, label_addr=base_addr):
@@ -2858,7 +2864,9 @@ class _EngineCore:
 
         if not (len(cross_dependents) >= max_results and len(same_dependents) >= max_results):
             for rule in self._ws.rules.values():
-                dep_cube = self.require_cube_by_id(rule.cube_id)
+                dep_cube = self.find_cube_by_id(rule.cube_id)
+                if dep_cube is None:
+                    continue  # rule anchored to a deleted cube — stale workspace state
                 if rule.addr_mask is None:
                     continue
                 expr = self._normalize_expression(rule.expression)
@@ -3063,7 +3071,10 @@ class _EngineCore:
                     tgt_addr_raw = target.get("addr")
                     if not isinstance(tgt_cube_id, str) or not isinstance(tgt_addr_raw, (tuple, list)):
                         continue
-                    tgt_cube = self.require_cube_by_id(tgt_cube_id)
+                    tgt_cube = self.find_cube_by_id(tgt_cube_id)
+                    if tgt_cube is None:
+                        # Dependent lives in a deleted cube — stale index entry.
+                        continue
                     tgt_addr = tuple(tgt_addr_raw)
                     queue.append((tgt_cube, tgt_addr, depth + 1))
 
@@ -3194,7 +3205,10 @@ class _EngineCore:
 
             for dep_key in next_nodes:
                 if dep_key not in seen and depth < max_depth:
-                    dep_cube = self.require_cube_by_id(dep_key[0])
+                    dep_cube = self.find_cube_by_id(dep_key[0])
+                    if dep_cube is None:
+                        # Precedent lives in a deleted cube — stale index entry.
+                        continue
                     queue.append((dep_cube, dep_key[1], depth + 1))
 
             uniq_next: list[tuple[str, tuple[str, ...]]] = []
@@ -3424,11 +3438,22 @@ class _EngineCore:
         cube = self._ws.cubes.get(cube_id)
         if cube is None:
             return False
+        # Remove the cube's rules first — orphaned rules keep a dead cube_id and
+        # crash dependent scans (require_cube_by_id) and pollute workspace_rules.
+        for rid in [rid for rid, r in self._ws.rules.items() if r.cube_id == cube_id]:
+            self._ws.delete_rule(rid)
         # Remove views using this cube
         views_to_remove = [v for v in self._ws.views.values() if v.cube_id == cube_id]
         for v in views_to_remove:
             self._ws.views.pop(v.id, None)
         self._ws.cubes.pop(cube_id, None)
+        # The dependency graph may hold this cube's nodes and cross-cube edges;
+        # stale cell::<cube>::* entries crash trace paths via require_cube_by_id.
+        self._dep_graph.remove_nodes_with_prefix(f"cell::{cube_id}::")
+        self._tracked_nodes = {
+            k for k in self._tracked_nodes if not k.startswith(f"cell::{cube_id}::")
+        }
+        self._cell_cache.clear()
         return True
 
     def delete_dimension(self, dim_id: str) -> bool:
@@ -4738,7 +4763,9 @@ class _EngineCore:
 
         proposed_source_dims = list(cube.dimension_ids) + [dim_id]
         for rule in self._ws.rules.values():
-            target_cube = self.require_cube_by_id(rule.cube_id)
+            target_cube = self.find_cube_by_id(rule.cube_id)
+            if target_cube is None:
+                continue  # rule anchored to a deleted cube — stale workspace state
             if not self._is_whole_cube_rule_mask(target_cube, rule.addr_mask, rule.targets):
                 continue
             expr = self._normalize_expression(rule.expression)

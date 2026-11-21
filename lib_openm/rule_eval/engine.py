@@ -1177,7 +1177,8 @@ class RuleEvaluator:
 
     def _fn_choose(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         """CHOOSE(index, value1, value2, ...) — returns the value at the 1-based index."""
-        self._require_argc(node, min_args=2)
+        if len(node.args) < 2:
+            return CellError("#VALUE!")
         index_val = self._eval(node.args[0], resolver, addr)
         if self._is_error(index_val):
             return index_val
@@ -1230,7 +1231,9 @@ class RuleEvaluator:
             p = self._coerce_number(p)
             if self._is_error(p):
                 return p
-            places = max(0, int(p))
+            places = int(p)
+        # ISO 26300 §6.17.5: "If X is halfway between the two nearest values,
+        # the result shall round away from zero."
         factor = 10 ** places
         scaled = v * factor
         if scaled >= 0:
@@ -1504,9 +1507,14 @@ class RuleEvaluator:
             p = self._coerce_number(p)
             if self._is_error(p):
                 return p
-            places = max(0, int(p))
+            places = int(p)
         factor = 10 ** places
-        return self._normalize_ieee_special(math.ceil(v * factor) / factor if v >= 0 else math.floor(v * factor) / factor)
+        scaled = v * factor
+        if v >= 0:
+            result = math.ceil(scaled) / factor
+        else:
+            result = math.floor(scaled) / factor
+        return self._normalize_ieee_special(float(result))
 
     def _fn_rounddown(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, min_args=1, max_args=2)
@@ -1524,9 +1532,14 @@ class RuleEvaluator:
             p = self._coerce_number(p)
             if self._is_error(p):
                 return p
-            places = max(0, int(p))
+            places = int(p)
         factor = 10 ** places
-        return self._normalize_ieee_special(math.floor(v * factor) / factor if v >= 0 else math.ceil(v * factor) / factor)
+        scaled = v * factor
+        if v >= 0:
+            result = math.floor(scaled) / factor
+        else:
+            result = math.ceil(scaled) / factor
+        return self._normalize_ieee_special(float(result))
 
     def _fn_trunc(self, node: _AstCall, resolver: CubeResolver | None, addr: tuple[str, ...]) -> Any:
         self._require_argc(node, min_args=1, max_args=2)

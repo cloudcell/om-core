@@ -755,6 +755,8 @@ class REPLSolverMixin:
                     return d.get("id", dim_name)
             return dim_name
 
+        _BATCH_CHUNK = 500
+
         def _ensure_items(dim_name: str, items: list[str]) -> None:
             """Add items that don't already exist in the dimension."""
             dim_id = dim_name_to_id.get(dim_name, dim_name)
@@ -762,14 +764,18 @@ class REPLSolverMixin:
             new_items = [it for it in items if it not in existing]
             if not new_items:
                 return
-            entries = [{"dim_id": dim_id, "name": it, "position": "append"} for it in new_items]
-            result = self.session.execute("create_dimension_items_batch", entries=entries)
-            if not result.success:
-                raise RuntimeError(f"create_dimension_items_batch for '{dim_name}' failed: {result.error}")
-            # Use returned IDs directly to update cache.
-            returned_ids = (result.data or {}).get("ids", [])
-            for it_name, it_id in zip(new_items, returned_ids):
-                item_name_to_id[dim_id][it_name] = it_id
+            # Chunk the batch — in remote mode each item is a separate engine
+            # RPC, so a single huge batch can exceed the transport timeout.
+            for i in range(0, len(new_items), _BATCH_CHUNK):
+                chunk = new_items[i:i + _BATCH_CHUNK]
+                entries = [{"dim_id": dim_id, "name": it, "position": "append"} for it in chunk]
+                result = self.session.execute("create_dimension_items_batch", entries=entries)
+                if not result.success:
+                    raise RuntimeError(f"create_dimension_items_batch for '{dim_name}' failed: {result.error}")
+                # Use returned IDs directly to update cache.
+                returned_ids = (result.data or {}).get("ids", [])
+                for it_name, it_id in zip(chunk, returned_ids):
+                    item_name_to_id[dim_id][it_name] = it_id
 
         # Ensure dimensions exist (Result-prefixed to avoid conflicts with existing dims).
         _ensure_dim("ResultTag")
@@ -797,9 +803,11 @@ class REPLSolverMixin:
 
         cube_dim_ids = cube_detail.get("dimension_ids", [])
 
-        # Write cells.
-        written = 0
-        failed = 0
+        # Write cells via the batch command — one transport call per chunk
+        # instead of one per cell (a large front would otherwise need 100k+
+        # round trips and hit the reply timeout).
+        dim_id_to_name = {did: dn for dn, did in dim_name_to_id.items()}
+        entries: list[dict] = []
         for pi, pt in enumerate(points):
             var_vals = pt.get("variable_values", [])
             obj_vals = pt.get("objective_values", [])
@@ -808,18 +816,13 @@ class REPLSolverMixin:
             for param_idx, param_name in enumerate(all_params):
                 if param_idx >= len(all_vals):
                     continue
-                val = all_vals[param_idx]
 
                 # Build address aligned to cube dimension order (skip @ dim).
                 addr_list: list[str] = []
                 for dim_id in cube_dim_ids:
                     if dim_id == "@":
                         continue
-                    dim_name = None
-                    for dn, did in dim_name_to_id.items():
-                        if did == dim_id:
-                            dim_name = dn
-                            break
+                    dim_name = dim_id_to_name.get(dim_id)
                     if dim_name == "ResultTag":
                         addr_list.append(item_name_to_id.get(dim_id, {}).get(tag, ""))
                     elif dim_name == "ResultPoint":
@@ -831,18 +834,23 @@ class REPLSolverMixin:
                         items = item_name_to_id.get(dim_id, {})
                         addr_list.append(next(iter(items.values()), ""))
 
-                r = self.session.execute(
-                    "set_cell_hardvalue_by_addr",
-                    cube_id=cube_id,
-                    addr=addr_list,
-                    value=str(val),
-                )
-                if r.success:
-                    written += 1
-                else:
-                    failed += 1
-                    if failed <= 3:
-                        self.println(f"  Warning: write failed {tag}/p{pi}/{param_name}: {r.error}")
+                entries.append({"addr": addr_list, "value": all_vals[param_idx]})
+
+        written = 0
+        failed = 0
+        for i in range(0, len(entries), _BATCH_CHUNK):
+            chunk = entries[i:i + _BATCH_CHUNK]
+            r = self.session.execute(
+                "set_cell_hardvalues_batch_by_addr",
+                cube_id=cube_id,
+                entries=chunk,
+            )
+            if r.success:
+                written += int((r.data or {}).get("affected", len(chunk)))
+            else:
+                failed += len(chunk)
+                if failed <= 3 * _BATCH_CHUNK:
+                    self.println(f"  Warning: batch write failed ({len(chunk)} cells): {r.error}")
 
         if failed:
             self.println(f"  Warning: {failed} writes failed.")
@@ -863,6 +871,7 @@ class REPLSolverMixin:
                 col_dims = [did]
             elif dn == "ResultTag" or did == "@":
                 page_dims.append(did)
+        user_dim_ids = [d for d in cube_dim_ids if d != "@"]
         if not row_dims and user_dim_ids:
             row_dims = [user_dim_ids[0]]
         if not col_dims and len(user_dim_ids) > 1:

@@ -283,3 +283,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+.zig-cache/
+zig-out/
+

@@ -127,6 +127,25 @@ if [ "$1" = "--remote" ]; then
     # default mode (which prompts for TUI) instead of forcing --gui-only.
 fi
 
+if [ "$1" = "--remote-monolith" ]; then
+    # Launch with the monolithic Zig runtime (embedded engine, single
+    # process). Same remote-eval contract as --remote, but server_bin
+    # points at zig_runtime's om-runtime instead of om-engine-server.
+    MONOLITH_BIN="${OM_RUNTIME_BIN:-$SCRIPT_DIR/zig_runtime/zig-out/bin/om-runtime}"
+    if [ ! -x "$MONOLITH_BIN" ]; then
+        echo "Monolithic runtime not found: $MONOLITH_BIN"
+        echo "Build it with: (cd zig_runtime && zig build)"
+        exit 1
+    fi
+    export OMENGINE_MODE=remote
+    export OM_ENGINE_SERVER_BIN="$MONOLITH_BIN"
+    # Separate default socket so it can coexist with an om-engine-server
+    # instance on the same machine. Launcher passes this path explicitly.
+    export OM_ENGINE_ENDPOINT="${OM_ENGINE_ENDPOINT:-unix:///tmp/om-runtime.sock}"
+    echo "Monolithic Zig runtime enabled (server_bin=$MONOLITH_BIN)"
+    shift
+fi
+
 if [ "$1" = "--runtime" ]; then
     # Standalone runtime host (no clients)
     echo "Starting OM runtime host..."
