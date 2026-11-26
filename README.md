@@ -62,6 +62,8 @@ Raw polls: <code>stats/polls.jsonl</code>
 
 # OM Core
 
+**[Try Open Modeling in your browser](https://om.cloudcell.nz/)** — the free browser application for multidimensional financial modeling and scenario analysis. Model calculations run locally using WebAssembly; no registration or installation is required. The application is in active development.
+
 OM Core is an open-source reference implementation of a multidimensional
 modeling engine for structured financial, operational, and analytical models.
 
